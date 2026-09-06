@@ -2266,6 +2266,27 @@ function conversationFromUrl(value) {
   }
 }
 
+/**
+ * The ChatGPT Project a URL belongs to, or null.
+ *
+ * Matches src/main/session/continuation.ts's
+ * normalizeProjectId: only `g-p-` plus 32 hex digits counts. A Project chat's path appends the
+ * Project's display name to that id, so the name is stripped here rather than carried into an
+ * address that a rename would invalidate. Custom GPTs are also served from `/g/`, and their
+ * slugs do not have this shape, so they are correctly not Projects.
+ */
+function projectFromUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    if (url.protocol !== 'https:' || (url.hostname !== 'chatgpt.com' && url.hostname !== 'chat.openai.com')) return null;
+    if (url.pathname.length > 512) return null;
+    const match = /^\/g\/(g-p-[0-9a-f]{32})(?:-[^/]*)?\//i.exec(url.pathname);
+    return match ? match[1].toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
 function isChatGptUrl(value) {
   try {
     const url = new URL(String(value || ''));
@@ -2656,15 +2677,21 @@ const HANDLERS = {
     // last live tab on the conversation.
     return releaseTab(source.tab, message.conversationId, source.documentId, source.navigationEpoch);
   },
-  async compact(message, _sender, source) {
+  async compact(message, sender, source) {
     await load();
     if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
     await noteTabConversation(source, message.conversationId);
     if (!ownsDocument(source)) return { ok: false, error: 'stale_document' };
+    // Read the sending document's address at the source-send boundary. A polling cache can
+    // belong to an earlier navigation, or be empty after app restart.
+    const sourceUrl = sender?.url;
+    if (sourceUrl && conversationFromUrl(sourceUrl) !== cleanConversationId(message.conversationId))
+      return { ok: false, error: 'stale_document' };
     const result = await call('/compact', {
       method: 'POST',
       body: JSON.stringify({
         conversationId: message.conversationId,
+        ...(sourceUrl ? { project: projectFromUrl(sourceUrl) } : {}),
         resume: message.resume !== false,
         cancel: message.cancel === true,
         ticket: message.ticket === true,
@@ -3180,6 +3207,12 @@ function deferredRevivalUrl(entry) {
  * locally either — when no redeem arrives the app opens it the old way, which is the only
  * recovery that still works if this window is closing.
  */
+/** Only the continuation's captured Project chooses a successor's scope. */
+function successorChatBase(offered) {
+  const project = typeof offered === 'string' && /^g-p-[0-9a-f]{32}$/.test(offered) ? offered : null;
+  return project ? `https://chatgpt.com/g/${project}/project` : 'https://chatgpt.com/';
+}
+
 async function placeSuccessorChat(raw, tabId) {
   const id = commandMarkerId(raw && raw.id);
   if (id && raw.background === true) {
@@ -3189,7 +3222,7 @@ async function placeSuccessorChat(raw, tabId) {
     const query = [marker];
     if (model) query.push(`model=${encodeURIComponent(model)}`);
     if (effort) query.push(`reasoning_effort=${encodeURIComponent(effort)}`);
-    const created = await createChatTab(`https://chatgpt.com/?${query.join('&')}#${marker}`, true);
+    const created = await createChatTab(`${successorChatBase(raw.project)}?${query.join('&')}#${marker}`, true);
     if (Number.isInteger(created?.id)) {
       await chrome.tabs.update(created.id, { autoDiscardable: false });
       discardProtectedTabs[String(created.id)] = true;
@@ -3224,7 +3257,7 @@ async function placeSuccessorChat(raw, tabId) {
   const query = [marker];
   if (model) query.push(`model=${encodeURIComponent(model)}`);
   if (reasoningEffort) query.push(`reasoning_effort=${encodeURIComponent(reasoningEffort)}`);
-  const create = { url: `https://chatgpt.com/?${query.join('&')}#${marker}`, windowId: home.windowId, active: raw.active !== false };
+  const create = { url: `${successorChatBase(raw.project)}?${query.join('&')}#${marker}`, windowId: home.windowId, active: raw.active !== false };
   // Directly after the chat it continues, so a handoff reads as one piece of work instead of a
   // tab appended to the far end of a long strip.
   if (typeof home.index === 'number') create.index = home.index + 1;

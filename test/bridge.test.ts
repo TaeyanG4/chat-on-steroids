@@ -2592,6 +2592,17 @@ describe('delivering a bootstrap', () => {
     expect(stale.body.error).toBe('no_such_command');
   });
 
+  it('captures the sending Project without an earlier activity poll', async () => {
+    await pair();
+    const id = 'abababab-1111-4222-8333-444444444444';
+    const session = await createSession({ title: 'Project source', conversationId: id });
+    const opened = await openContinuationNow(session.id, id);
+    const project = 'g-p-11111111222233334444555555555555';
+    const result = await request('POST', '/compact', { body: { conversationId: id, token: opened.token, sourceAttempt: true, project } });
+    expect(result.status).toBe(200);
+    expect(continuationByToken(opened.token)?.project).toBe(project);
+  });
+
   it('validates deferred revival ids read-only before browser restart recovery opens a tab', async () => {
     await pair();
     spawn({ workers: [{ task: 'sleep and wake for recovery validation' }], caller: { conversationId: PRIME_CHAT } });

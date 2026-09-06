@@ -12,30 +12,23 @@ the app refuses the extension and asks you to reload the matching copy.
 ## Unreleased
 
 ### Fixed
-- **A prime can choose each worker's model and reasoning level again.** The broker has accepted
-  per-worker `model` and `reasoning_effort` for some time — validating both before creating
-  anything, failing the whole spawn on an unrecognised value, carrying them on the worker's
-  fresh-chat URL, and reporting them in spawn receipts and status — and `docs/tool-surface.md`
-  documented them as available. The `agents` input schema never exposed them: its `workers`
-  object is `.strict()` and declared only `label` and `task`, so a spawn naming a model was
-  rejected outright rather than honoured, and the task description told the caller the opposite,
-  that model and reasoning were fixed in app settings. Both fields are now on the schema, with
-  `reasoning_effort` declared as the canonical vocabulary so a caller can discover it instead of
-  guessing. Omitting them is unchanged: the default from app settings, or the account default.
+- Discover account-specific ChatGPT models and reasoning options from the mounted picker state,
+  including nested version menus and localized labels. Restore the original selection after discovery.
+- Reuse existing tabs for passive discovery; keep plugin-refresh and worker commands tied to one
+  opening attempt across delayed replies and extension suspension. Validate revival markers with
+  the app before browser-restart recovery and never interpret a failed tab scan as absence.
+- Open worker tabs without selecting them when the companion wake channel is connected; retire
+  idle sleeping worker tabs while retaining their reusable conversations.
+- Preserve a Compact & Resume source Project in its durable source-send checkpoint and route the
+  replacement through that Project, including after app restart.
+- Expose the supported per-worker model and reasoning options in the `agents` schema.
 
 ### Added
-- **Your own instructions for the connectors.** A settings field whose text is appended to what
-  the Core and Desktop MCP servers tell ChatGPT about themselves, so a standing preference — run
-  the tests before claiming a change works, prefer this package manager, never force-push — does
-  not have to be repeated in every chat. It is stored in settings, so an app update no longer
-  overwrites it; editing `app.asar` was previously the only way to add anything at all.
+- Browser only setting to suppress automatic helper/recovery tab creation.
+- Persistent custom Core/Desktop connector instructions, including concurrent settings-save support.
 
-  It is appended last and under a heading naming the user as its author. Both are deliberate:
-  everything above it is what the app can actually promise about its own tools, and a preference
-  must not silently redefine one — and the model should be able to tell a standing instruction
-  from the person apart from the connector's description of itself, because those carry different
-  authority. Empty adds nothing, not even the heading. Changing it asks for the same reconnect a
-  tool change does, since ChatGPT reads connector instructions once, when it loads the tools.
+### Removed
+- Debug-only Reload companion button from the extension popup.
 
 ## [2.0.6] — 2026-09-06
 
