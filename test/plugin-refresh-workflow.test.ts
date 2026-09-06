@@ -7,13 +7,13 @@ const source = readFileSync(new URL('../extension/content.js', import.meta.url),
 const section = source.slice(source.indexOf('  let pluginRefreshBusy = false;'), source.indexOf('  function catalogPageReady('));
 const id = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 const tools = [{ name: 'read', description: 'Read current.', inputSchema: { type: 'object' } }];
-function workflow(options: { unchanged?: boolean; deny?: boolean; navigateDuringClaim?: boolean } = {}) {
+function workflow(options: { unchanged?: boolean; deny?: boolean; navigateDuringClaim?: boolean; refreshAvailable?: boolean } = {}) {
   let refreshed = false;
   const click = vi.fn(() => { refreshed = true; });
   const context = vm.createContext({ URL, alive: true, generating: false, epoch: 1,
     location: { pathname: '/', href: `https://chatgpt.com/?cos-plugin-refresh=${id}#settings/Plugins/plugin_asdk_app_synthetic` },
     CLF_DOM: { generating: () => false, pluginManagementIdle: () => true,
-      pluginRefreshView: () => ({ appId: 'asdk_app_synthetic', refresh: { click }, tools: options.unchanged || refreshed ? tools : [{ ...tools[0], description: 'Old description.' }] }) }
+      pluginRefreshView: () => ({ appId: 'asdk_app_synthetic', refresh: options.refreshAvailable === false ? null : { click }, tools: options.unchanged || refreshed ? tools : [{ ...tools[0], description: 'Old description.' }] }) }
   });
   const ask = vi.fn(async (message: { action: string }) => {
     if (message.action === 'claim' && options.navigateDuringClaim) context.epoch = 2;
@@ -73,6 +73,12 @@ it('keeps a loading settings index pending and restores custody after its instal
 });
 it('records an already current schema without clicking Refresh and invalidating old chats', async () => {
   const h = workflow({ unchanged: true });
+  expect(await h.run()).toBe(true);
+  expect(h.click).not.toHaveBeenCalled();
+  expect(h.ask.mock.calls.map(([message]) => message.action)).toEqual(['current']);
+});
+it('records an already current schema when the workspace exposes no Refresh control', async () => {
+  const h = workflow({ unchanged: true, refreshAvailable: false });
   expect(await h.run()).toBe(true);
   expect(h.click).not.toHaveBeenCalled();
   expect(h.ask.mock.calls.map(([message]) => message.action)).toEqual(['current']);

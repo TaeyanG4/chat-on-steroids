@@ -9918,13 +9918,14 @@
       }, current, 8000);
       if (!view) return false;
       if (!current()) return false;
-      if (!view || (request.appId && view.appId !== request.appId) || !view.refresh || view.refresh.disabled) { await fail('Exact connector settings or Refresh control could not be verified'); return false; }
+      if (request.appId && view.appId !== request.appId) { await fail('Exact connector settings could not be verified'); return false; }
       const ownedEpoch = epoch, appId = view.appId;
       const stillCurrent = () => current() && epoch === ownedEpoch && CLF_DOM.pluginRefreshView(request.connectorName, request.tools, appId)?.appId === appId;
       const before = schemaKey(view.tools), expected = schemaKey(request.tools);
       if (before === expected) {
         return (await ask({ type: 'plugin_refresh', action: 'current', id: request.id, appId, connectorName: request.connectorName, tools: view.tools }))?.data?.ok === true && stillCurrent();
       }
+      if (!view.refresh || view.refresh.disabled) { await fail('Connector schema differs, but a Refresh control is unavailable'); return false; }
       const claimed = await ask({ type: 'plugin_refresh', action: 'claim', id: request.id, appId, connectorName: request.connectorName, tools: view.tools });
       if (!claimed?.data?.ok || !stillCurrent()) { await fail('Connector refresh claim or page ownership was not confirmed'); return false; }
       view.refresh.click(); // the durable main-process attempt owns this one click
