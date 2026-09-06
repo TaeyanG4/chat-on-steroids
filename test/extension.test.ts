@@ -39,8 +39,8 @@ describe('extension release metadata', () => {
     expect(lock.version).toBe(APP_VERSION);
     expect(lock.packages?.['']?.version).toBe(APP_VERSION);
     expect(manifest.version).toBe(APP_VERSION);
-    expect(BRIDGE_PROTOCOL).toBe(12);
-    expect(backgroundSource).toContain('const BRIDGE_PROTOCOL = 12;');
+    expect(BRIDGE_PROTOCOL).toBe(13);
+    expect(backgroundSource).toContain('const BRIDGE_PROTOCOL = 13;');
   });
 
   /**
@@ -1817,7 +1817,7 @@ describe('extension revival delivery', () => {
     expect(worker.tabsCreate).not.toHaveBeenCalled();
   });
 
-  it('persists revival identity before routing and recreates a closed tab after browser restart', async () => {
+  it('persists revival custody and never recreates its user-closed tab after browser restart', async () => {
     const local = new FakeStorageArea(paired);
     const first = loadWorker({ local, session: new FakeStorageArea(), fetch: app() });
     await first.registerTab(4, 'document-4-live');
@@ -1837,10 +1837,21 @@ describe('extension revival delivery', () => {
       fetch: app(),
       tabsQuery: async () => []
     });
-    await vi.waitFor(() => expect(restarted.tabsCreate).toHaveBeenCalledTimes(1));
-    const opened = String(restarted.tabsCreate.mock.calls[0]?.[0]?.url || '');
-    expect(opened).toContain(`/c/${CHAT}`);
-    expect(opened).toContain(`clf=${revival.id}`);
+    await restarted.fireAlarm();
+    expect(restarted.tabsCreate).not.toHaveBeenCalled();
+    expect(local.data.deferredRevivals).toMatchObject([{ ...revival, openingSpent: true }]);
+  });
+
+  it('persists the first revival opening before Chrome and never repeats it across restart', async () => {
+    const local = new FakeStorageArea({ ...paired, deferredRevivals: [revival] });
+    const first = loadWorker({ local, session: new FakeStorageArea(), fetch: app(), tabsQuery: async () => [] });
+    await vi.waitFor(() => expect(first.tabsCreate).toHaveBeenCalledTimes(1));
+    expect(local.data.deferredRevivals).toMatchObject([{ ...revival, openingSpent: true }]);
+    await first.fireAlarm();
+    expect(first.tabsCreate).toHaveBeenCalledTimes(1);
+    const restarted = loadWorker({ local, session: new FakeStorageArea(), fetch: app(), tabsQuery: async () => [] });
+    await restarted.fireAlarm();
+    expect(restarted.tabsCreate).not.toHaveBeenCalled();
   });
 
   it('prunes a stale deferred revival before browser startup can recreate its ChatGPT tab', async () => {

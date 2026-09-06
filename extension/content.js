@@ -1758,7 +1758,7 @@
     const selection = CLF_DOM.visibleModelSelection?.();
     const model = (selection?.model || '').trim().toLowerCase().replace(/\s+/g, '-');
     // Exact aliases match shared/chat-models.ts::isProModel (the extension is plain JS).
-    const pro = /^(?:astra|gpt-?6(?:\.0)?-(?:pro|astra)|gpt-?5\.6-pro)$/.test(model) ||
+    const pro = /^(?:astra|gpt-?6-astra|gpt-?\d+(?:[.-]\d+)?-pro)$/.test(model) ||
       (/^(?:gpt-?6(?:\.0)?|gpt-?5\.6(?:-sol)?)$/.test(model) && selection?.reasoningEffort === 'pro');
     if (!fiberPresent && !unwitnessedGeneration && model && !pro && answerText(turn).length > 0) return { outcome: 'completed' };
     if (turnStalled()) {
@@ -9704,7 +9704,7 @@
     decision.publishing = true;
     void ask({ type: 'desktop_input', id: decision.id, owner: decision.owner, lifetime: decision.temporary ? 'temporary-planner' : undefined, response: decision.response }).then((reply) => {
       if (reply?.data?.ok === true && desktopDecision === decision && alive && epoch === decision.epoch && CLF_DOM.conversationId() === decision.conversationId) {
-        // Keep this exact temporary receipt until a replacement work tab exists.
+        // Keep this exact temporary receipt until maintenance retires this planner.
         // Its owner/text proves later safe closure without publishing the answer twice.
         if (decision.temporary) decision.accepted = true;
         else desktopDecision = null;
@@ -9806,13 +9806,27 @@
       if (!onTarget() || CLF_DOM.generating() || (!ownsFreshPage() && (CLF_DOM.composer()?.textContent || '').trim()) || CLF_DOM.hasComposerAttachments()) return fail('The ChatGPT composer changed before sending');
       if (!CLF_DOM.insertPrompt(input.text, ownsFreshPage())) return fail('ChatGPT did not accept the text');
       draft = CLF_DOM.captureComposerDraft(input.text, onTarget);
-      if (!(await CLF_DOM.uploadImages(input.images, onTarget, draft))) return fail('Image upload was not confirmed. Check the unsent draft in ChatGPT before trying again.');
+      const files = [];
+      for (const attachment of input.attachments || []) {
+        const parts = [];
+        for (let offset = 0; offset < attachment.size; offset += 524288) {
+          if (!onTarget()) return false;
+          const response = await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId: target, attachmentId: attachment.id, offset });
+          const chunk = response?.data?.chunk;
+          if (typeof chunk !== 'string' || chunk.length > 699052) return fail('Attachment transfer failed. The message was not sent.');
+          const bytes = Uint8Array.from(atob(chunk), char => char.charCodeAt(0));
+          if (bytes.length !== Math.min(524288, attachment.size - offset)) return fail('Attachment transfer was incomplete.');
+          parts.push(bytes);
+        }
+        files.push(new File(parts, attachment.name, { type: attachment.mimeType }));
+      }
+      if (!(await CLF_DOM.uploadImages(input.images, onTarget, draft, files))) return fail('Attachment upload was not confirmed. Check the unsent draft and any file error in ChatGPT before trying again.');
       await Promise.resolve();
       // Cancellation revokes this exact claim while model/image preparation awaits.
       // A cancellation after this check can race the click; only the receipt proves delivery.
       const authorized = await ask({ type: 'desktop_input', id: input.id, owner: input.owner, conversationId: target, authorize: true });
       if (authorized?.data?.ok !== true) return false;
-      if (!onTarget() || sendText(CLF_DOM.composer()?.textContent) !== sendText(input.text)) return fail('The composer changed; your draft was preserved');
+      if (!onTarget() || !draft.current() || sendText(CLF_DOM.composer()?.textContent) !== sendText(input.text)) return fail('The composer changed; your draft was preserved');
       rememberUserSend();
       const submittedText = sendText(CLF_DOM.composer()?.textContent);
       const sendingTarget = () => {
@@ -10069,6 +10083,7 @@
         const users = CLF_DOM.messages().filter(row => row.role === 'user');
         const exact = desktopDecision?.id === message.id && desktopDecision?.owner === message.owner;
         sendResponse({ safe: temporaryPlannerPage() && location.href.includes(`cos-input=${message.id}`) &&
+          !generating && !CLF_DOM.generating() && pendingTools === 0 && !CLF_DOM.hasComposerAttachments() &&
           !(CLF_DOM.composer()?.textContent || '').trim() &&
           (users.length === 0 || (exact && users.length === 1 && sendText(users[0].text) === sendText(desktopDecision.text))) });
         return false;

@@ -1,16 +1,7 @@
-> [!NOTE]
-> **Workaround for the published 2.0.6 build**
->
-> Set ChatGPT's interface language to **English**, then reload your ChatGPT tabs and retry model discovery in Chat On Steroids. That release's model-picker integration relies on English UI labels. The current source fixes this; see [Browser behavior](#browser-behavior-in-the-current-source). Other languages can leave the model list empty even when the extension is connected and all setup checks are green.
->
-> **Quick fix if the model picker isn't showing:**
->
-> 1. Open Chat On Steroids or click the model picker's **Refresh** button.
-> 2. Switch to the **Chrome window and ChatGPT tab that the app opens**.
-> 3. If ChatGPT shows a model list instead of the thinking-effort slider, click **GPT-5.6 Sol**, even if it already looks selected.
-> 4. Return to Chat On Steroids and **refresh the model picker again**.
->
-> This workaround has restored the model picker for a user whose setup checks were all green. If it still does not appear, please report it in [Issues](../../issues).
+> [!IMPORTANT]
+> **2.0.7 needs its matching companion extension.** Reload the unpacked extension after updating.
+> Model discovery now reads your account's native picker state across languages and nested version menus.
+> See [Browser behavior](#browser-behavior-in-the-current-source) for tab reuse, Browser only and native file attachments.
 
 
 <div align="center">
@@ -181,6 +172,8 @@ The MCP connector uses ChatGPT's documented Developer mode and Secure MCP Tunnel
 ## Browser behavior in the current source
 
 The published 2.0.6 build's English-language and nested-picker workaround remains relevant until you install a build containing these fixes. The current source reads account-evaluated model IDs, available efforts and version choices instead of English picker labels. New model families appear after **Reload ChatGPT models**, provided ChatGPT exposes them to your account in the supported picker structure. Discovery restores the previous selection and sends no message.
+
+The current composer accepts dropped files (including Markdown) and dropped text, or **Add photos & files**. Files keep their original bytes and appear as compact filename cards above the message. Up to 20 files and 512 MB total can be prepared per message; ChatGPT's account, format and upload limits still determine acceptance. Files wait for the next native message when a turn is running. The app sends only after every attachment is confirmed and the draft is still unchanged. A failed upload leaves a visible error and is never automatically resent. Install the matching protocol-13 companion with this source build.
 
 Opening the app reuses an idle ChatGPT tab for its initial observation when the browser is already present; showing the window again does not refresh a ready catalog or open Chrome. Explicit model reloads also reuse suitable tabs. A pending operation keeps its selected tab through settings navigation and extension-worker suspension. A slow page or missing receipt never authorizes a second OS open.
 

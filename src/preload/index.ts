@@ -2,7 +2,7 @@ import type { ChatModelCatalog } from '../shared/chat-models.js';
 import type { TaskProgress } from '../shared/task-progress.js';
 import type { BrowserPreferences } from '../shared/browser-preferences.js';
 import type { SessionControlsView } from '../main/bridge.js';
-import type { InputImage } from '../shared/input.js';
+import type { InputAttachment } from '../shared/input.js';
 import type { UsageOverview } from '../shared/usage.js';
 import type { InputArgs, InputEntry } from '../main/session/input.js';
 import type { LocalProject } from '../shared/projects.js';
@@ -73,8 +73,9 @@ export interface SessionDetail {
 }
 
 const api = {
-  chooseImages: () => call<InputImage[]>('sessions:images'),
-  dropImages: (files: File[]) => call<InputImage[]>('sessions:dropImages', { paths: files.map(file => webUtils.getPathForFile(file)) }),
+  chooseFiles: () => call<InputAttachment[]>('sessions:files'),
+  dropFiles: (files: File[]) => call<InputAttachment[]>('sessions:dropFiles', { paths: files.map(file => webUtils.getPathForFile(file)) }),
+  attachText: (text: string) => call<InputAttachment>('sessions:attachText', { text }),
   getUsage: () => call<UsageOverview>('usage:get'),
   getState: () => call<AppState>('state:get'),
   saveSettings: (patch: SettingsPatch, base: SettingsPatch) => call<AppState>('settings:save', { patch, base }),

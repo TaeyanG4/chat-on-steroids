@@ -50,6 +50,68 @@ async function worker(inputs: Array<{ id: string; conversationId: string | null 
 }
 
 describe('one browser maintenance flight per desktop outbox publication', () => {
+  it.each(['closed', 'navigated'])('does not reopen an elected input tab after it is %s, including browser restart', async reason => {
+    const input = { id: firstId, conversationId: null };
+    const h = await worker([input]);
+    await h.maintain();
+    expect(h.create).toHaveBeenCalledTimes(1);
+    if (reason === 'closed') h.tabs.length = 0;
+    else { h.tabs[0]!.url = 'https://chatgpt.com/'; delete h.tabs[0]!.pendingUrl; }
+    await h.maintain(); await h.maintain();
+    expect(h.create).toHaveBeenCalledTimes(1);
+    const restarted = await worker([input], undefined, h.localSaved);
+    await restarted.maintain();
+    expect(restarted.create).not.toHaveBeenCalled();
+  });
+  it('spends input opening authority before creation and permits a new explicit operation', async () => {
+    const inputs = [{ id: firstId, conversationId: null }];
+    const h = await worker(inputs);
+    h.create.mockImplementationOnce(async () => { throw new Error('Chrome rejected creation'); });
+    await expect(h.maintain()).rejects.toThrow('Chrome rejected creation'); await h.maintain();
+    expect(h.create).toHaveBeenCalledTimes(1);
+    inputs.splice(0, 1, { id: secondId, conversationId: null });
+    await h.maintain();
+    expect(h.create).toHaveBeenCalledTimes(2);
+  });
+  it('does not create behind a failed custody write', async () => {
+    const h = await worker([{ id: firstId, conversationId: null }]);
+    h.local.set.mockImplementation(async value => {
+      if ('inputOpenings' in value) throw new Error('disk full');
+      Object.assign(h.localSaved, value);
+    });
+    await expect(h.maintain()).rejects.toThrow('disk full'); await h.maintain();
+    expect(h.create).not.toHaveBeenCalled();
+  });
+  it('restores the pre-create checkpoint without reopening after a crash before tab-id persistence', async () => {
+    const input = { id: firstId, conversationId: null };
+    const h = await worker([input], undefined, { inputOpenings: { [firstId]: { tab: null } } });
+    await h.maintain();
+    expect(h.create).not.toHaveBeenCalled();
+    h.tabs.push({ id: 9, url: `https://chatgpt.com/?cos-input=${firstId}` });
+    await h.maintain();
+    expect(h.sendMessage).toHaveBeenCalledWith(9, expect.objectContaining({ type: 'clf-desktop-input', id: firstId }));
+    expect(h.create).not.toHaveBeenCalled();
+  });
+  it('does not confuse a temporarily withheld offer with retired opening authority', async () => {
+    const input = { id: firstId, conversationId: null };
+    const inputs = [input];
+    const h = await worker(inputs);
+    await h.maintain(); h.tabs.length = 0;
+    inputs.length = 0;
+    await h.maintain();
+    inputs.push(input);
+    await h.maintain();
+    expect(h.create).toHaveBeenCalledTimes(1);
+  });
+  it('closes an explicitly retired temporary planner without requiring another work tab', async () => {
+    const h = await worker([{ id: firstId, conversationId: null, owner: '7:planner:1', lifetime: 'temporary-planner', close: true, retire: true } as any]);
+    h.tabs.push({ id: 7, url: `https://chatgpt.com/?temporary-chat=true&cos-input=${firstId}` });
+    await h.authorizeDocument({ tab: { id: 7 }, documentId: 'planner', frameId: 0, url: h.tabs[0]!.url }, { navigationEpoch: 1 });
+    h.sendMessage.mockImplementation(async () => ({ safe: true } as never));
+    await h.maintain();
+    expect(h.remove).toHaveBeenCalledWith(7);
+    expect(h.create).not.toHaveBeenCalled();
+  });
   it('never opens a helper for passive model observation, including repeated maintenance', async () => {
     const h = await worker([]);
     const request = { nonce: firstId, expiresAt: Date.now() + 60000, allowOpen: false };
@@ -369,14 +431,14 @@ describe('one browser maintenance flight per desktop outbox publication', () => 
     expect(h.sendMessage).toHaveBeenCalledTimes(2);
   });
 
-  it('releases a failed flight so a later pass can retry and matches exact marker identity', async () => {
+  it('releases a failed flight without repeating its opening and matches exact marker identity', async () => {
     const h = await worker([{ id: firstId, conversationId: null }]);
     h.tabs.push({ id: 50, url: `https://chatgpt.com/?other=cos-input=${firstId}` });
     h.create.mockRejectedValueOnce(new Error('Chrome temporarily refused tab creation'));
     await expect(h.maintain()).rejects.toThrow('temporarily refused');
     await h.maintain();
-    expect(h.create).toHaveBeenCalledTimes(2);
-    expect(h.tabs).toHaveLength(2);
+    expect(h.create).toHaveBeenCalledTimes(1);
+    expect(h.tabs).toHaveLength(1);
   });
 });
 

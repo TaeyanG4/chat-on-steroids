@@ -3,7 +3,8 @@ import { REASONING_EFFORTS } from '../shared/session.js';
 import { getChatModels, startChatModelDiscovery, configureChatModelDiscovery } from './chat-models.js';
 import { releaseSessionFinish, requestSessionFinishGoal } from './session/finish.js';
 import { GOAL_MARKER_INSTRUCTION } from '../shared/goal-templates.js';
-import { prepareInputImage, validateInputImages } from './session/input-images.js';
+import { validateInputImages } from './session/input-images.js';
+import { stageInputAttachment } from './session/input-attachments.js';
 import { recordDeliveredInput, recordedInputImage } from './session/input-history.js';
 import { UI_BASE_ZOOM } from './window-layout.js';
 import { usageOverview } from './session/usage.js';
@@ -724,19 +725,25 @@ export function registerIpc(getWindow: () => BrowserWindow | null, quitToInstall
     return { summary, events, total: summary.events, nextFrom };
   });
 
-  handle('sessions:images', async () => {
-    const chosen = await dialog.showOpenDialog({ title: 'Attach images', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }] });
+  const stageFiles = async (sources: Array<string | { text: string }>) => {
+    const retained = new Set((await listInputs()).filter(row => !['sent', 'failed', 'cancelled'].includes(row.state)).flatMap(row => row.attachments?.map(file => file.id) ?? []));
+    const result = [];
+    for (const source of sources) result.push(await stageInputAttachment(source, retained));
+    return result;
+  };
+  handle('sessions:files', async () => {
+    const chosen = await dialog.showOpenDialog({ title: 'Attach files', properties: ['openFile', 'multiSelections'] });
     if (chosen.canceled) return [];
-    if (chosen.filePaths.length > 4) throw new Error('Attach up to four images at a time');
-    const images = [];
-    for (const file of chosen.filePaths) images.push(await prepareInputImage(file));
-    return images;
+    if (chosen.filePaths.length > 20) throw new Error('Attach up to 20 files per message');
+    return stageFiles(chosen.filePaths);
   });
-  handle('sessions:dropImages', async payload => {
-    const { paths } = z.object({ paths: z.array(z.string().min(1).max(32768)).min(1).max(4) }).parse(payload);
-    const images = [];
-    for (const file of paths) images.push(await prepareInputImage(file));
-    return images;
+  handle('sessions:dropFiles', async payload => {
+    const { paths } = z.object({ paths: z.array(z.string().min(1).max(32768)).min(1).max(20) }).parse(payload);
+    return stageFiles(paths);
+  });
+  handle('sessions:attachText', async payload => {
+    const { text } = z.object({ text: z.string().min(1).max(4 * 1024 * 1024) }).parse(payload);
+    return (await stageFiles([{ text }]))[0]!;
   });
   handle('sessions:stopTurn', async payload => {
     const { id, expectedTurnId } = sessionIdArg.extend({ expectedTurnId: z.string().min(1).max(256) }).parse(payload);

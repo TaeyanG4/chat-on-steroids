@@ -9,7 +9,9 @@ The app and the `extension/` companion are versioned together. **Reload the
 extension after updating the app**. If their bridge protocols are incompatible,
 the app refuses the extension and asks you to reload the matching copy.
 
-## Unreleased
+## [2.0.7] — 2026-09-07
+
+**plus = infinite 5.6 sol; pro = unlimited astra**
 
 ### Fixed
 - Discover account-specific ChatGPT models and reasoning options from the mounted picker state,
@@ -22,10 +24,22 @@ the app refuses the extension and asks you to reload the matching copy.
 - Preserve a Compact & Resume source Project in its durable source-send checkpoint and route the
   replacement through that Project, including after app restart.
 - Expose the supported per-worker model and reasoning options in the `agents` schema.
+- Recognize native GPT-5.6/5.5 Pro IDs without prematurely finishing their quiet turns; retain the
+  ten-minute recovery window. Update worker context meters from recorded tool calls and preserve
+  proven pre-turn model identity in estimated usage.
+- Preserve one opening attempt for desktop messages and deferred revivals across tab closure,
+  navigation and browser restart. Retire completed/cancelled planner tabs after exact safe-page proof.
+- Keep pending plan stages visible between enqueue and the first native send receipt.
+- Center the context popup directly above its ring for every model.
+- Renew manual compaction only on growing evidence from its exact source answer. Distinguish
+  missing tunnel metrics from a readable zero; classify network failures only in poll context.
 
 ### Added
 - Browser only setting to suppress automatic helper/recovery tab creation.
 - Persistent custom Core/Desktop connector instructions, including concurrent settings-save support.
+- Native file and text drops with compact attachment cards, immutable staged bytes and bounded
+  owner-scoped delivery. Unsupported uploads remain unsent with a visible error. Bridge protocol 13
+  requires the matching companion to prevent older copies silently omitting attachments.
 
 ### Removed
 - Debug-only Reload companion button from the extension popup.

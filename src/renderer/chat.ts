@@ -5,7 +5,7 @@ import { preserveTimelineViewport } from './timeline-scroll.js';
 import { communicationTitle, foldAgentCommunication } from './agent-communication.js';
 import { initContextMeter, paintContextMeter } from './context-meter.js';
 import { isAstraModel } from '../shared/chat-models.js';
-import type { InputImage, InputAutomation } from '../shared/input.js';
+import type { InputImage, InputAttachment, InputAutomation } from '../shared/input.js';
 import type { InputEntry } from '../main/session/input.js';
 import type { LocalProject } from '../shared/projects.js';
 import type { TaskProgress } from '../shared/task-progress.js';
@@ -119,7 +119,7 @@ let pendingNewInput: { id: string; generation: number } | null = null;
 let agentPanel: ReturnType<typeof createAgentPanel> | null = null;
 const expandedWorkers = new Set<string>();
 const inputDrafts = new Map<string, string>();
-const imageDrafts = new Map<string, InputImage[]>();
+const imageDrafts = new Map<string, Array<InputImage | InputAttachment>>();
 const startingInputs = new Map<string, InputEntry>();
 const visibleInputIds = new Set<string>();
 // Window-local presentation only: a new incident or changed status is visible again.
@@ -145,13 +145,29 @@ function paintComposerImages(): void {
   const images = imageDrafts.get(key) ?? [];
   const box = $('composerImages'); box.hidden = !images.length; box.replaceChildren();
   images.forEach((image, index) => {
-    const tile = el('div', 'composer-image');
-    const preview = document.createElement('img'); preview.src = image.dataUrl; preview.alt = image.name;
+    const tile = 'dataUrl' in image ? el('div', 'composer-image') : attachmentCard(image);
+    if ('dataUrl' in image) { const preview = document.createElement('img'); preview.src = image.dataUrl; preview.alt = image.name; tile.append(preview); }
     const remove = el('button', 'image-remove', '×'); remove.setAttribute('type', 'button'); remove.setAttribute('aria-label', `Remove ${image.name}`);
     remove.addEventListener('click', () => { imageDrafts.set(key, images.filter((_entry, at) => at !== index)); paintComposerImages(); });
-    tile.append(preview, remove); box.append(tile);
+    tile.append(remove); box.append(tile);
   });
   paintDeliveryControls();
+}
+function attachmentCard(file: InputAttachment): HTMLElement {
+  if (file.preview) { const tile = el('div', 'composer-image'); tile.title = file.name;
+    const image = document.createElement('img'); image.src = file.preview; image.alt = file.name; tile.append(image); return tile; }
+  const tile = el('div', 'attachment-card'); tile.title = file.name;
+  const glyph = el('span', 'attachment-icon');
+  glyph.setAttribute('aria-hidden', 'true');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '24'); svg.setAttribute('height', '24');
+  const lines = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  lines.setAttribute('d', 'M7 3h10a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3Zm1 6h8M8 13h8M8 17h5');
+  lines.setAttribute('fill', 'none'); lines.setAttribute('stroke', 'currentColor'); lines.setAttribute('stroke-width', '1.6'); lines.setAttribute('stroke-linecap', 'round');
+  svg.append(lines); glyph.append(svg);
+  const details = el('div', 'attachment-details');
+  details.append(el('div', 'attachment-name', file.name), el('div', 'attachment-kind', file.mimeType.startsWith('image/') ? 'Image' : 'File'));
+  tile.append(glyph, details); return tile;
 }
 
 let events: SessionEvent[] = [];
@@ -892,7 +908,7 @@ async function sendPreparedPlan(): Promise<void> {
   plan.sending = true; paintPreparedPlan();
   try {
     const sent = await sendComposer(undefined, tasks);
-    if (preparedPlan === plan && sent) cancelTaskPlan();
+    if (preparedPlan === plan && sent) { await refreshInputQueue(); if (preparedPlan === plan) cancelTaskPlan(); }
   } finally {
     if (preparedPlan === plan) { plan.sending = false; paintPreparedPlan(); paintDeliveryControls(); }
   }
@@ -1283,6 +1299,7 @@ function eventBody(event: SessionEvent, context?: { id: string; current: () => b
     case 'user_message': {
       const box = el('div', 'said is-user');
       box.append(el('b', '', 'You'));
+      if (event.attachments?.length) { const files = el('div', 'message-attachments'); files.append(...event.attachments.map(attachmentCard)); box.append(files); }
       box.append(textBlock('msg', event.authoredText ?? event.message.text, event.authoredText === undefined && event.message.truncated, event.authoredText?.length ?? event.message.chars));
       if (event.inputDelivery) {
         box.classList.add('has-input-receipt');
@@ -2594,6 +2611,15 @@ async function refreshInputQueue(): Promise<void> {
     ? pendingNewInput?.generation === selectionGeneration && entry.id === pendingNewInput.id
     : (entry.sessionId ?? entry.deliveredSessionId) === selectedId;
   const queuedTasks = all.filter(entry => belongsToSelection(entry) && queuedFollowup(entry) && ['queued', 'tool', 'browser'].includes(entry.state));
+  // The first input already durably owns every later stage. Show that authority
+  // until its native receipt materializes the actual queue, without a blank gap.
+  const staged = [...all, ...[...startingInputs.values()].filter(entry => !all.some(row => row.id === entry.id))]
+    .filter(entry => belongsToSelection(entry) && !entry.stagesApplied && ['queued', 'browser', 'tool'].includes(entry.state));
+  const projectedIds = new Set<string>();
+  for (const entry of staged) for (const [index, text] of (entry.stages ?? []).entries()) {
+    const id = `${entry.id}:stage:${index}`; projectedIds.add(id);
+    queuedTasks.push({ ...entry, id, text, mode: 'finish', state: 'browser', stages: undefined });
+  }
   const queueSession = selectedId;
   const reorder = async (from: string, to: string, after: boolean) => {
     if (!queueSession || selectedId !== queueSession) return;
@@ -2613,6 +2639,7 @@ async function refreshInputQueue(): Promise<void> {
     if (dragging && existing) return existing;
     if (entry.state === 'queued' && existing?.querySelector('textarea') && existing.contains(document.activeElement)) return existing;
     const card = el('div', 'queued-input'); card.dataset.inputId = entry.id;
+    if (projectedIds.has(entry.id)) card.setAttribute('aria-label', 'Plan stage · waiting for the first message to be sent');
     const label = el('span', 'queue-label', entry.text); label.title = `${entry.state === 'queued' ? (entry.mode === 'after-turn' ? 'After the next completed answer' : 'At Session finish or after a completed answer') : 'Awaiting receipt'} · ${entry.text}`;
     card.append(icon('i-clock'), label);
     if (entry.state === 'queued') {
@@ -2688,6 +2715,7 @@ async function refreshInputQueue(): Promise<void> {
     visibleInputIds.add(entry.id);
     if (visibleInputIds.size > 100) visibleInputIds.delete(visibleInputIds.values().next().value!);
     const status = entry.error || (entry.state === 'failed' ? 'Delivery not confirmed' : entry.state === 'decision' ? 'Preparing follow-up' : entry.state === 'browser' ? 'Delivery confirmation pending' : entry.state === 'tool' ? 'Sent to the active turn · awaiting receipt' : entry.dueAt > Date.now() ? `Scheduled ${new Date(entry.dueAt).toLocaleString()}` : 'Queued');
+    if (entry.attachments?.length) { const files = el('div', 'message-attachments'); files.append(...entry.attachments.map(attachmentCard)); row.append(files); }
     row.append(el('div', 'pending-message-text', entry.text));
     if (entry.images?.length) {
       const images = el('div', 'pending-images');
@@ -2712,6 +2740,7 @@ async function refreshInputQueue(): Promise<void> {
         if (input.value.trim() || imageDrafts.get(draftKey())?.length) { toast('Send or clear your current draft before retrying this message.'); return; }
         input.value = entry.text;
         if (entry.images?.length) imageDrafts.set(draftKey(), [...entry.images]);
+        if (entry.attachments?.length) imageDrafts.set(draftKey(), [...(entry.images ?? []), ...entry.attachments]);
         rememberDraft(); paintComposerImages(); paintDeliveryControls(); input.focus();
         dismissInputNotice(entry.id);
       };
@@ -2765,7 +2794,7 @@ async function sendComposer(delivery?: 'finish', plan?: string[]): Promise<boole
   const key = draftKey();
   const projectId = selectedId ? sessions.find(row => row.id === selectedId)?.projectId ?? null : selectedProjectId;
   const images = imageDrafts.get(key) ?? [];
-  const text = plan?.[0] ?? (input.value.trim() || (images.length ? 'Please look at the attached images.' : ''));
+  const text = plan?.[0] ?? (input.value.trim() || (images.length ? 'Please look at the attached files.' : ''));
   if ($<HTMLButtonElement>('chatSend').disabled) return;
   if (!text) {
     const target = selectedId, selection = selectionGeneration;
@@ -2804,14 +2833,15 @@ async function sendComposer(delivery?: 'finish', plan?: string[]): Promise<boole
   const dueAt = Date.now();
   const id = crypto.randomUUID();
   const authoredDraft = input.value;
-  startingInputs.set(id, { id, sessionId, projectId, text, images, mode: mode === 'finish' ? 'finish' : mode === 'auto' ? 'auto' : 'after-turn',
+  const attachmentPayload = { images: images.filter((file): file is InputImage => 'dataUrl' in file), attachments: images.filter((file): file is InputAttachment => 'id' in file) };
+  startingInputs.set(id, { id, sessionId, projectId, text, ...attachmentPayload, stages: plan?.slice(1), mode: mode === 'finish' ? 'finish' : mode === 'auto' ? 'auto' : 'after-turn',
     dueAt, ...modelSettings, state: 'queued', owner: null, createdAt: dueAt, conversationId: null });
   input.value = ''; input.style.height = 'auto'; inputDrafts.delete(key);
   if (sessionId === null) pendingNewInput = { id, generation };
   void refreshInputQueue();
   paintDeliveryControls();
   try {
-    const result = await run(api.sendInput({ id, sessionId, projectId, text, images, stages: plan?.slice(1), objective: mode === 'finish' ? undefined : $<HTMLTextAreaElement>('sessionObjective').value.trim() || undefined, automation: mode === 'finish' ? undefined : $<HTMLSelectElement>('chatAutomation').value as InputAutomation, mode: mode === 'finish' ? 'finish' : mode === 'auto' ? 'auto' : 'after-turn', dueAt, ...modelSettings }));
+    const result = await run(api.sendInput({ id, sessionId, projectId, text, ...attachmentPayload, stages: plan?.slice(1), objective: mode === 'finish' ? undefined : $<HTMLTextAreaElement>('sessionObjective').value.trim() || undefined, automation: mode === 'finish' ? undefined : $<HTMLSelectElement>('chatAutomation').value as InputAutomation, mode: mode === 'finish' ? 'finish' : mode === 'auto' ? 'auto' : 'after-turn', dueAt, ...modelSettings }));
     if (cancelledStarts.has(id)) return;
     if (!result) {
       if (selectedId === sessionId && selectionGeneration === generation && !input.value) input.value = authoredDraft;
@@ -3036,15 +3066,15 @@ export function initChat(next: Deps): void {
       finally { button.disabled = false; if (selectedId === id) void refreshSessionControls(); }
     });
   }
-  const appendImages = (key: string, chosen: InputImage[] | null | undefined): void => {
+  const appendImages = (key: string, chosen: InputAttachment[] | null | undefined): void => {
     if (!chosen?.length) return;
     const combined = [...(imageDrafts.get(key) ?? []), ...chosen];
-    if (combined.length > 4) { toast('Attach up to four images per message'); return; }
+    if (combined.length > 20 || combined.reduce((sum, file) => sum + ('size' in file ? file.size : 0), 0) > 512 * 1024 * 1024) { toast('Attach up to 20 files and 512 MB per message'); return; }
     imageDrafts.set(key, combined); if (draftKey() === key) paintComposerImages();
   };
   $('attachImages').addEventListener('click', async () => {
     const key = draftKey();
-    appendImages(key, await run(api.chooseImages()));
+    appendImages(key, await run(api.chooseFiles()));
   });
   $('generateFinishGoal').addEventListener('click', async () => {
     const button = $<HTMLButtonElement>('generateFinishGoal'), id = selectedId, turnId = controlledTurnId;
@@ -3059,16 +3089,16 @@ export function initChat(next: Deps): void {
     }
   });
   $('composer').addEventListener('dragover', event => {
-    if (!event.dataTransfer?.types.includes('Files')) return;
+    if (!event.dataTransfer?.types.some(type => type === 'Files' || type === 'text/plain')) return;
     event.preventDefault(); event.dataTransfer.dropEffect = 'copy';
   });
   $('composer').addEventListener('drop', async event => {
-    if (!event.dataTransfer?.types.includes('Files')) return;
+    if (!event.dataTransfer?.types.some(type => type === 'Files' || type === 'text/plain')) return;
     event.preventDefault();
     const files = Array.from(event.dataTransfer.files), key = draftKey();
-    if (!files.length) return;
-    if (files.length + (imageDrafts.get(key)?.length ?? 0) > 4) { toast('Attach up to four images per message'); return; }
-    appendImages(key, await run(api.dropImages(files)));
+    if (!files.length) { const text = event.dataTransfer.getData('text/plain'); if (text) { const file = await run(api.attachText(text)); if (file) appendImages(key, [file]); } return; }
+    if (files.length + (imageDrafts.get(key)?.length ?? 0) > 20) { toast('Attach up to 20 files per message'); return; }
+    appendImages(key, await run(api.dropFiles(files)));
   });
   api.onWriteSession?.(id => { selectSession(id); $<HTMLTextAreaElement>('chatInput').focus(); });
   $('newChat').addEventListener('click', () => {

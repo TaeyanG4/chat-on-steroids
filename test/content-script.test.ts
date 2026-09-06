@@ -5254,6 +5254,8 @@ describe('a stop button that goes missing while the turn is still running', () =
     null,
     { model: 'GPT-6 Pro' },
     { model: 'GPT-5.6 Pro' },
+    { model: 'gpt-5-6-pro' },
+    { model: 'gpt-5-5-pro' },
     { model: 'GPT-6', reasoningEffort: 'pro' },
     { model: 'GPT-5.6 Sol', reasoningEffort: 'pro' }
   ])('requires actual final evidence without Fiber for Pro or unknown selection %j', async (selection) => {

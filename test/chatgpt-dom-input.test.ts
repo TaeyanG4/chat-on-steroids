@@ -12,7 +12,7 @@ interface DomApi {
   inspectModelSettings(current?: () => boolean, failure?: (reason: string) => void): Promise<Array<{id: string; label: string; efforts: string[]}> | null>;
   send(options?: { acceptanceTimeoutMs?: number; stillCurrent?: () => boolean }): Promise<boolean>;
   selectModelSettings(model: string | null, effort: string | null, current?: () => boolean): Promise<boolean>;
-  uploadImages(images: Array<{ name: string; dataUrl: string }>, current?: () => boolean, draft?: ReturnType<DomApi['captureComposerDraft']>): Promise<boolean>;
+  uploadImages(images: Array<{ name: string; dataUrl: string }>, current?: () => boolean, draft?: ReturnType<DomApi['captureComposerDraft']>, files?: File[]): Promise<boolean>;
 }
 let dom: JSDOM;
 let document: Document;
@@ -176,6 +176,23 @@ function upload() {
   return input;
 }
 describe('native image readiness', () => {
+  it('uploads original Markdown bytes and recognizes localized native file actions without duplicate tiles', async () => {
+    const input = upload(); input.id = 'upload-files'; input.accept = '';
+    const draft = api.captureComposerDraft('Exact app prompt');
+    document.execCommand = command => { if (command === 'delete') box.replaceChildren(); return true; };
+    input.addEventListener('change', () => {
+      const tile = document.createElement('div'); tile.setAttribute('role', 'group'); tile.setAttribute('aria-label', 'Notes.md');
+      tile.innerHTML = '<div data-default-action="true"><button aria-label="Notes.md"></button></div><button aria-label="删除文件 1: Notes.md"></button>';
+      tile.lastElementChild!.addEventListener('click', () => tile.remove());
+      document.querySelector('form')!.append(tile);
+    });
+    const file = new dom.window.File(['# exact markdown'], 'Notes.md', { type: 'text/markdown' });
+    expect(await api.uploadImages([], () => true, draft, [file])).toBe(true);
+    expect(input.files?.[0]).toBe(file);
+    expect(api.hasComposerAttachments()).toBe(true);
+    expect(await draft.clear()).toBe(true);
+    expect(api.hasComposerAttachments()).toBe(false); draft.dispose();
+  });
   it('withdraws only the exact prepared app text and ready attachment nodes before Send', async () => {
     const input = upload();
     document.execCommand = command => { if (command === 'delete') box.replaceChildren(); return true; };

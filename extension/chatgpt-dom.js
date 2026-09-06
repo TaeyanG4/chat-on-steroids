@@ -580,10 +580,17 @@ var CLF_DOM = (() => {
     const changed = event => { if (event.isTrusted) touched = true; };
     for (const name of events) host?.addEventListener(name, changed, true);
     const same = () => !touched && stillCurrent() && composer() === box && box?.isConnected && box.textContent === insertedText;
+    const ownsAttachments = () => {
+      if (!same() || !host) return false;
+      const current = [...host.querySelectorAll('button[aria-label]')].filter(node => composerFileName(node));
+      return current.length === files.length && current.every(node => files.includes(node)) &&
+        !host.querySelector('[aria-busy="true"], [role="progressbar"], [data-inline-file-uploading]');
+    };
     return {
       attachments(nodes) { if (same()) files = [...nodes]; },
+      current: ownsAttachments,
       async clear() {
-        if (!same() || !host) return false;
+        if (!ownsAttachments() || !host) return false;
         const current = [...host.querySelectorAll('button[aria-label]')].filter(node => composerFileName(node));
         if (current.length !== files.length || current.some(node => !files.includes(node)) ||
             host.querySelector('[aria-busy="true"], [role="progressbar"], [data-inline-file-uploading]')) return false;
@@ -1686,7 +1693,14 @@ var CLF_DOM = (() => {
   }
 
   /** Native ChatGPT photo input, observed as #upload-photos. Sending waits for every tile. */
-  const composerFileName = (button) => /^Remove file(?: \d+)?: (.+)$/.exec(button.getAttribute('aria-label') || '')?.[1];
+  function composerFileName(button) {
+    const group = button.closest('[role="group"][aria-label]');
+    if (group?.querySelector('[data-default-action="true"] button')) {
+      const actions = [...group.querySelectorAll('button')].filter(node => !node.closest('[data-default-action="true"]'));
+      return actions.length === 1 && actions[0] === button ? group.getAttribute('aria-label') : undefined;
+    }
+    return /^Remove file(?: \d+)?: (.+)$/.exec(button.getAttribute('aria-label') || '')?.[1];
+  }
   function hasComposerAttachments() {
     const host = composerBox() || composerActions()?.host;
     return !!host && (!!host.querySelector('[data-inline-file-uploading], [role="progressbar"]') ||
@@ -1729,15 +1743,17 @@ var CLF_DOM = (() => {
   function pluginManagementIdle() {
     return safe(() => ![...document.querySelectorAll('textarea,input:not([type="hidden"]),[contenteditable="true"]')].some(node => node.getClientRects().length > 0 && String(node.value || node.textContent || '').trim()), false);
   }
-  async function uploadImages(images, stillCurrent = () => true, draft = null) {
+  async function uploadImages(images, stillCurrent = () => true, draft = null, files = []) {
+    if (files.length) images = [...(images || []), ...files];
     if (!images?.length) return true;
-    if (!Array.isArray(images) || images.length > 4 || !stillCurrent() || hasComposerAttachments()) return false;
-    const input = document.querySelector('input#upload-photos[type="file"][accept="image/*"]');
+    if (!Array.isArray(images) || images.length > 20 || !stillCurrent() || hasComposerAttachments()) return false;
+    const input = document.querySelector(files.length ? 'input#upload-files[type="file"]' : 'input#upload-photos[type="file"][accept="image/*"]');
     if (!input) return false;
     const priorTiles = new Set((composerBox() || composerActions()?.host)?.querySelectorAll('button[aria-label]') || []);
     const transfer = new DataTransfer();
     try {
       for (const image of images) {
+        if (image instanceof File) { transfer.items.add(image); continue; }
         if (typeof image.name !== 'string' || !/^data:image\/webp;base64,[A-Za-z0-9+/]+={0,2}$/.test(image.dataUrl) || image.dataUrl.length > 512100) return false;
         const raw = atob(image.dataUrl.split(',')[1]);
         const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
@@ -1773,7 +1789,7 @@ var CLF_DOM = (() => {
       };
       observer = new MutationObserver(check);
       observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
-      timer = setTimeout(() => finish(false), 60000);
+      timer = setTimeout(() => finish(false), files.length ? 600000 : 60000);
       check();
     });
   }

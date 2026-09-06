@@ -194,7 +194,7 @@ describe('OpenAI tunnel process ownership', () => {
     await handle.stop();
   });
 
-  it('starts a replacement with no inherited health address, handshake, or outage verdict', async () => {
+  it.each(['unavailable', 'missing timestamp'])('starts a replacement with no inherited health and %s metrics', async missing => {
     vi.useFakeTimers();
     vi.setSystemTime(1_800_000_000_000);
     const reports: any[] = [];
@@ -203,7 +203,10 @@ describe('OpenAI tunnel process ownership', () => {
       const url = new URL(String(input));
       if (url.pathname === '/readyz') return new Response('ok');
       if (url.pathname === '/metrics') {
-        if (!metricsAvailable) throw new Error('metrics unavailable');
+        if (!metricsAvailable) {
+          if (missing === 'missing timestamp') return new Response('commands_poll_errors_total 0\n');
+          throw new Error('metrics unavailable');
+        }
         return new Response(
           `commands_poll_last_successful_timestamp_seconds ${Date.now() / 1000}\ncommands_poll_errors_total 0\n`
         );

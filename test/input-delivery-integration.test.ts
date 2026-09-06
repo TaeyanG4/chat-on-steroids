@@ -56,6 +56,20 @@ beforeEach(async () => {
   goal.resetGoalStateForTests(); input.resetInputForTests(); pushed.mockClear();
   await saveConfig({ ...defaultConfig(), goal: { ...defaultConfig().goal, enabled: false } });
 });
+it('serves staged attachment bytes only to the exact unsent browser input owner', async () => {
+  const { stageInputAttachment } = await import('../src/main/session/input-attachments.js');
+  const file = await stageInputAttachment({ text: 'Attachment payload' }, new Set());
+  const other = await stageInputAttachment({ text: 'Different input' }, new Set([file.id]));
+  const row = await input.enqueueInput({ ...message(null, 'off'), mode: 'auto', attachments: [file] });
+  const request = { id: row.id, owner: 'document-one', conversationId: null, attachmentId: file.id, offset: 0 };
+  expect((await post('/input/attachment', request)).status).toBe(409);
+  await post('/input/claim', { id: row.id, owner: request.owner, conversationId: null, requiresAuthorization: true });
+  expect((await post('/input/attachment', { ...request, owner: 'document-two' })).status).toBe(409);
+  expect((await post('/input/attachment', { ...request, attachmentId: other.id })).status).toBe(409);
+  expect(Buffer.from((await post('/input/attachment', request)).body.chunk, 'base64').toString()).toBe('Attachment payload');
+  expect((await post('/input/claim', { ...request, authorize: true })).body.ok).toBe(true);
+  expect((await post('/input/attachment', request)).status).toBe(409);
+});
 it('revokes a claimed send via IPC, fences pre-send authorization and records a late exact receipt', async () => {
   const row = message(null, 'goal');
   await input.enqueueInput(row as import('../src/main/session/input.js').InputArgs);

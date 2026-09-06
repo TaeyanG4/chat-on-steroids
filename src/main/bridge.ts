@@ -1417,9 +1417,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         modelCatalogRequest: pendingChatModelRequest(),
         pluginRefreshRequests: pluginRefreshPublications().map(({ surface, schemaId, connectorName }) => ({ surface, schemaId, connectorName })),
         browserPreferenceRequest: pendingBrowserPreferenceRequest(),
+        inputOpeningIds: inputRows.filter(row => !['sent', 'failed', 'cancelled'].includes(row.state)).map(row => row.id),
         inputs: [...(await pendingBrowserInputs()).filter(input => !input.conversationId || runningToolCalls(input.conversationId) === 0),
           ...inputRows.filter(row => row.lifetime === 'temporary-planner' && ['sent', 'cancelled', 'failed'].includes(row.state))
             .map(row => ({ id: row.id, owner: row.owner, lifetime: row.lifetime, close: true,
+              retire: true,
               replacements: inputRows.filter(next => next.createdAt > row.createdAt && next.purpose !== 'decision')
                 .map(next => ({ id: next.id, conversationId: next.conversationId })) }))],
         background: getConfig().ui.backgroundChats === true,
@@ -1446,10 +1448,17 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     } catch { return json(res, 400, { error: 'invalid_usage' }, origin); }
   }
 
-  if (['/input/claim', '/input/bind', '/input/ack', '/input/fail', '/input/answer', '/input/progress'].includes(route) && req.method === 'POST') {
+  if (['/input/claim', '/input/bind', '/input/ack', '/input/fail', '/input/answer', '/input/progress', '/input/attachment'].includes(route) && req.method === 'POST') {
     const body = await readBody(req) as Record<string, unknown>;
     if (!body || typeof body.id !== 'string' || !/^[a-f0-9-]{36}$/i.test(body.id) || typeof body.owner !== 'string' || body.owner.length > 160) {
       return json(res, 400, { error: 'invalid_input_claim' }, origin);
+    }
+    if (route === '/input/attachment') {
+      const entry = (await listInputs()).find(row => row.id === body.id && row.owner === body.owner && row.state === 'browser' && row.sendAuthorizedAt === undefined);
+      const attachment = entry?.attachments?.find(file => file.id === body.attachmentId);
+      if (!attachment || entry?.conversationId !== body.conversationId || typeof body.offset !== 'number') return json(res, 409, { error: 'attachment_not_owned' }, origin);
+      const { readInputAttachmentChunk } = await import('./session/input-attachments.js');
+      return json(res, 200, { chunk: await readInputAttachmentChunk(attachment, body.offset) }, origin);
     }
     if (route === '/input/fail') return json(res, 200, { ok: await failBrowserInput(body.id, body.owner, typeof body.error === 'string' ? body.error : 'Unable to prepare ChatGPT') }, origin);
     if (route === '/input/progress') {
@@ -6165,6 +6174,10 @@ function noteCallAttribution(
   filedSession: SessionSummary | null = null
 ): void {
   if (conversationId) {
+    // MCP truth can grow while a Pro page emits no new observation. The just-filed
+    // canonical summary, not a later browser poll, owns the worker's context meter.
+    if (currentConversation && filedSession?.id === sessionId && filedSession.conversationId === conversationId)
+      noteAgentContextTokens(conversationId, filedSession.contextTokens);
     if (currentConversation && !endsActivity) lastAttributedCallAt.set(conversationId, Date.now());
     // The recorder has just withdrawn a completed end the page reported: the same server turn
     // went on calling tools. Whatever Goal was drafting for that end — or had filed as owed —

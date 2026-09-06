@@ -6042,7 +6042,7 @@ describe('unattributed activity recovery', () => {
     }
   });
 
-  for (const model of ['GPT-6 Pro', 'GPT-5.6 Pro']) it(`keeps ${model} silent until ten minutes without inventing a Goal final`, async () => {
+  for (const model of ['GPT-6 Pro', 'GPT-5.6 Pro', 'gpt-5-6-pro', 'gpt-5-5-pro']) it(`keeps ${model} silent until ten minutes without inventing a Goal final`, async () => {
     const previous = getConfig();
     await saveConfig({ ...previous, goal: { ...previous.goal, enabled: true, mode: 'loop' } });
     await setSecret('openRouterApiKey', 'sk-or-pro');
@@ -6108,13 +6108,13 @@ describe('unattributed activity recovery', () => {
       expect(await maintenance()).toMatchObject({ reason: 'silence' });
     } finally { vi.useRealTimers(); }
   });
-  it('extends Pro activity from fresh observed tool starts and exact calls, not replayed tool rows', async () => {
-    const timingChat = 'a1111111-1111-4111-8111-111111111111';
+  it.each(['gpt-6-pro', 'gpt-5-6-pro'])('extends %s activity from fresh observed tool starts and exact calls, not replayed tool rows', async model => {
+    const timingChat = model === 'gpt-6-pro' ? 'a1111111-1111-4111-8111-111111111111' : 'a5555555-1111-4111-8111-111111111111';
     vi.useFakeTimers();
     try {
       await pair();
       const began = Date.now();
-      await events(timingChat, [{ kind: 'model_selection', model: 'gpt-6', reasoningEffort: 'pro', time: began }, openTurn('pro-tools')]);
+      await events(timingChat, [{ kind: 'model_selection', model, reasoningEffort: 'pro', time: began }, openTurn('pro-tools')]);
       const sessionId = (await request('GET', `/activity?conversationId=${timingChat}`)).body.sessionId;
       const { sessionActivityExpiresAt } = await import('../src/main/bridge.js');
       await vi.advanceTimersByTimeAsync(60_000);
@@ -6881,6 +6881,27 @@ describe('unattributed activity recovery', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it.each(['gpt-5-6-pro', 'gpt-6-pro'])('updates %s worker tokens and proven model from a call without another page event', async model => {
+    await pair();
+    spawn({ workers: [{ task: 'measure exact recorded context' }], caller: { conversationId: PRIME } });
+    const bootstrap = await redeem();
+    const workerChat = model === 'gpt-5-6-pro' ? 'b1111111-1111-4111-8111-111111111111' : 'b2222222-1111-4111-8111-111111111111';
+    await request('POST', '/commands/ack', { body: { id: bootstrap.id, status: 'sent', conversationId: workerChat, agent: 'worker-1' } });
+    const began = Date.now();
+    await events(workerChat, [{ kind: 'model_selection', model, reasoningEffort: 'pro', time: began }, { kind: 'turn_start', time: began, turnId: 'meter-' + model }]);
+    const sessionId = (await request('GET', `/activity?conversationId=${workerChat}`)).body.sessionId;
+    const before = swarmState().agents.find(agent => agent.conversationId === workerChat)!.contextTokens;
+    const call = await recordToolCall({ tool: 'read', args: { path: '/project/file' }, content: [{ type: 'text', text: 'recorded work '.repeat(100) }], outcome: 'ok', durationMs: 1, startedAt: began + 1, conversationId: workerChat, sessionId });
+    expect(call).toMatchObject({ model, reasoningEffort: 'pro' });
+    const summary = await getSession(sessionId);
+    expect(summary!.contextTokens).toBeGreaterThan(before);
+    expect(swarmState().agents.find(agent => agent.conversationId === workerChat)!.contextTokens).toBe(summary!.contextTokens);
+    // A changed picker now describes the next selection, not the still-running model.
+    await events(workerChat, [{ kind: 'model_selection', model: 'gpt-5-6-thinking', reasoningEffort: 'high', time: began + 2 }]);
+    const afterSwitch = await recordToolCall({ tool: 'read', args: {}, content: [{ type: 'text', text: 'more work' }], outcome: 'ok', durationMs: 1, startedAt: began + 3, conversationId: workerChat, sessionId });
+    expect(afterSwitch?.model).toBeUndefined();
   });
 
   it('reloads a silent joined turn once, then sleeps the Worker only if it stays dead', async () => {

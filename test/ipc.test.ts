@@ -84,12 +84,12 @@ const removeRoot = (payload: unknown): Promise<any> => handlers.get('roots:remov
 const sessionEvents = (payload: unknown): Promise<any> => handlers.get('sessions:events')!(null, payload) as Promise<any>;
 const sessionList = (): Promise<any> => handlers.get('sessions:list')!(null, undefined) as Promise<any>;
 
-it('validates dropped image count and decodes bytes through the existing image authority', async () => {
-  const drop = (payload: unknown) => handlers.get('sessions:dropImages')!(null, payload) as Promise<any>;
+it('validates dropped file count and stages arbitrary native file types', async () => {
+  const drop = (payload: unknown) => handlers.get('sessions:dropFiles')!(null, payload) as Promise<any>;
   expect(await drop({ paths: [] })).toMatchObject({ ok: false });
-  expect(await drop({ paths: Array(5).fill('image.png') })).toMatchObject({ ok: false });
+  expect(await drop({ paths: Array(21).fill('image.png') })).toMatchObject({ ok: false });
   expect(await drop({ paths: [''] })).toMatchObject({ ok: false });
-  expect(await drop({ paths: [path.join(process.cwd(), 'package.json')] })).toMatchObject({ ok: false });
+  expect(await drop({ paths: [path.join(process.cwd(), 'package.json')] })).toMatchObject({ ok: true, data: [expect.objectContaining({ name: 'package.json', mimeType: 'application/json' })] });
 });
 
 it('does not authorize the composer Generate Goal action from an absent or stale finish wait', async () => {

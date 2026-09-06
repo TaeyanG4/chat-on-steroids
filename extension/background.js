@@ -40,7 +40,7 @@ const MODEL_REQUEST_TIMEOUT_MS = 190_000;
 /** The reason a deadline aborts with, so it is a fact the caller can act on rather than prose. */
 const TIMED_OUT = 'the app took too long to answer';
 /** Bumped only when the request/response shape changes; the app compares it. */
-const BRIDGE_PROTOCOL = 12;
+const BRIDGE_PROTOCOL = 13;
 
 /**
  * Journal caps. The byte figure is what actually matters — chrome.storage.session has a
@@ -219,6 +219,9 @@ let settled = [];
  * bridge redeem is still the authority fence and rejects commands that no longer exist.
  */
 let deferredRevivals = [];
+// Opening custody is durable independently of a page receipt. Only the app's next outbox
+// publication retires an input id; navigation, user-close and MV3 suspension do not.
+let inputOpenings = {};
 /** One in-flight same-tab offer per deferred command in this MV3 worker lifetime. */
 const deferredRevivalOffers = new Map();
 /** App says an active agent/recovery episode still needs the maintenance cadence. */
@@ -240,13 +243,15 @@ function load() {
 }
 
 async function loadOnce() {
-  const stored = await chrome.storage.local.get(['port', 'token', 'disconnected', 'deferredRevivals', 'commandAckOutbox']);
+  const stored = await chrome.storage.local.get(['port', 'token', 'disconnected', 'deferredRevivals', 'commandAckOutbox', 'inputOpenings']);
   port = typeof stored.port === 'number' ? stored.port : null;
   token = typeof stored.token === 'string' ? stored.token : null;
   // Deliberately in `local` rather than `session`: a choice to disconnect that a browser
   // restart undoes is not a choice, it is a delay.
   disconnected = stored.disconnected === true;
   deferredRevivals = Array.isArray(stored.deferredRevivals) ? stored.deferredRevivals.slice(-100) : [];
+  inputOpenings = stored.inputOpenings && typeof stored.inputOpenings === 'object' && !Array.isArray(stored.inputOpenings)
+    ? Object.fromEntries(Object.entries(stored.inputOpenings).filter(([id, row]) => /^[a-f0-9-]{36}$/i.test(id) && row && (row.tab === null || Number.isInteger(row.tab))).slice(-1000)) : {};
   const live = await chrome.storage.session.get([
     'settled',
     'journal',
@@ -322,6 +327,7 @@ function persistLive() {
       // revival text is duplicated into extension storage.
       chrome.storage.local.set({
         commandAckOutbox: commandAckOutbox.slice(-200),
+        inputOpenings,
         deferredRevivals: deferredRevivals.slice(-100)
       })
     ])
@@ -1290,12 +1296,15 @@ function deferredRevivalId(value) {
   return commandMarkerId(value);
 }
 
-async function rememberDeferredRevival(idValue, conversationValue) {
+async function rememberDeferredRevival(idValue, conversationValue, openingSpent = false) {
   await load();
   const id = deferredRevivalId(idValue);
   const conversationId = cleanConversationId(conversationValue);
   if (!id || !conversationId) return false;
-  if (deferredRevivals.some((entry) => entry?.id === id && cleanConversationId(entry.conversationId) === conversationId)) {
+  const existing = deferredRevivals.find((entry) => entry?.id === id && cleanConversationId(entry.conversationId) === conversationId);
+  if (existing) {
+    if (openingSpent) existing.openingSpent = true;
+    await persistLive();
     return true;
   }
   // There can only be one not-yet-redeemed wake for one existing conversation. Seeing a newer
@@ -1316,7 +1325,7 @@ async function rememberDeferredRevival(idValue, conversationValue) {
         entry.id !== id &&
         cleanConversationId(entry.conversationId) !== conversationId
     ),
-    { id, conversationId, queuedAt: Date.now() }
+    { id, conversationId, queuedAt: Date.now(), openingSpent }
   ].slice(-100);
   await persistLive();
   return true;
@@ -1692,8 +1701,17 @@ async function createChatTab(url, background = false, active = !background) {
   });
 }
 
-async function deliverDesktopInputs(inputs, background) {
-  if (!Array.isArray(inputs) || !inputs.length) return;
+async function deliverDesktopInputs(inputs, background, activeIds) {
+  if (!Array.isArray(inputs)) return;
+  // An offer can disappear while its chat has running tools. Only the complete app-owned
+  // outbox identity projection proves retirement; missing legacy metadata retires nothing.
+  const currentIds = Array.isArray(activeIds) ? new Set(activeIds) : null;
+  const retired = currentIds ? Object.keys(inputOpenings).filter(id => !currentIds.has(id)) : [];
+  if (retired.length) {
+    for (const id of retired) delete inputOpenings[id];
+    await persistLive();
+  }
+  if (!inputs.length) return;
   let tabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
   const matchesInput = (input, tab) => {
     if (!input || !/^[a-f0-9-]{36}$/i.test(input.id)) return false;
@@ -1712,25 +1730,36 @@ async function deliverDesktopInputs(inputs, background) {
     let tab = candidates.sort((a, b) => a.id - b.id)[0];
     if (input.close === true && input.lifetime === 'temporary-planner') {
       if (!tab) continue;
-      // Preserve the warm planner until newer app work has an actual browser tab.
-      // Terminal input metadata is the lifecycle authority, including after restart;
-      // unrelated personal/catalog tabs are not a replacement for this handoff.
+      // Keep the latest completed preview warm until its work has a tab. The app can
+      // retire cancelled/obsolete planners immediately; document proof still gates closure.
       const replacements = Array.isArray(input.replacements) ? input.replacements : [];
       const replacement = tabs.find(candidate => candidate.id !== tab.id && replacements.some(next => matchesInput(next, candidate)));
-      if (!replacement) continue;
+      if (!replacement && input.retire !== true) continue;
       const documentId = tabDocuments[String(tab.id)];
       const source = { tab: tab.id, documentId, navigationEpoch: tabEpochs[String(tab.id)] };
       try {
         const proof = await chrome.tabs.sendMessage(tab.id, { type: 'clf-close-temporary-planner', id: input.id, owner: input.owner }, { documentId });
         const current = await chrome.tabs.get(tab.id);
-        const successor = await chrome.tabs.get(replacement.id);
+        const successor = replacement ? await chrome.tabs.get(replacement.id) : null;
         if (proof?.safe === true && ownsDocument(source) && String(current.url || '').includes(marker) &&
-            replacements.some(next => matchesInput(next, successor))) await chrome.tabs.remove(tab.id);
+            (input.retire === true || (successor && replacements.some(next => matchesInput(next, successor))))) await chrome.tabs.remove(tab.id);
       } catch { /* only the exact still-owned temporary document may close */ }
       continue;
     }
+    const opening = inputOpenings[input.id];
+    if (opening && opening.tab !== null) tab = candidates.find(candidate => candidate.id === opening.tab);
+    if (!tab && opening) continue;
+    if (!opening) {
+      if (Object.keys(inputOpenings).length >= 1000) continue;
+      // Spend authority before Chrome can create anything. A crash or failed write cannot
+      // leave a created tab followed by an apparently unattempted operation.
+      inputOpenings[input.id] = { tab: tab?.id ?? null };
+      await persistLive();
+    }
     if (!tab) {
       tab = await createChatTab(target ? `https://chatgpt.com/c/${encodeURIComponent(target)}` : `https://chatgpt.com/?${input.lifetime === 'temporary-planner' ? 'temporary-chat=true&' : ''}${marker}#${marker}`, background);
+      inputOpenings[input.id] = { tab: tab.id };
+      await persistLive();
       tabs.push(tab);
       continue;
     }
@@ -2030,7 +2059,7 @@ async function maintainOnce() {
   if (reply.data.placement) await placeSuccessorChat(reply.data.placement, null);
   inspectRequestedModels(reply.data.modelCatalogRequest);
   inspectRequestedPluginRefresh(reply.data.pluginRefreshRequests, reply.data.background === true, reply.data.browserOnly === true);
-  await deliverDesktopInputs(reply.data.inputs, reply.data.background === true);
+  await deliverDesktopInputs(reply.data.inputs, reply.data.background === true, reply.data.inputOpeningIds);
   if (!backgroundReady) await reconcileBackgroundWindow(reply.data);
   const monitoring = reply.data.recoveryMonitoring === true;
   if (monitoring !== recoveryMonitoring) {
@@ -2358,6 +2387,11 @@ const HANDLERS = {
     if (message.ack === true && message.lifetime !== 'temporary-planner') {
       if (message.conversationId !== conversationId || !ownsDocument(source)) return { ok: false, error: 'stale_send_receipt' };
       return ackDesktopInput(id, owner, conversationId, message.messageId);
+    }
+    if (typeof message.attachmentId === 'string') {
+      if (message.owner !== owner || !ownsDocument(source)) return { ok: false };
+      const result = await call('/input/attachment', { method: 'POST', body: JSON.stringify({ id, owner, conversationId, attachmentId: message.attachmentId, offset: message.offset }) });
+      return ownsDocument(source) ? result : { ok: false, error: 'stale_document' };
     }
     const result = await call(typeof message.partial === 'string' ? '/input/progress' : typeof message.response === 'string' ? '/input/answer' : message.fail === true ? '/input/fail' : message.ack === true ? '/input/ack' : '/input/claim', {
       method: 'POST', body: JSON.stringify({ id, owner, conversationId, requiresAuthorization: message.requiresAuthorization === true, authorize: message.authorize === true, partial: typeof message.partial === 'string' ? message.partial.slice(-8000) : undefined, messageId: typeof message.messageId === 'string' ? message.messageId : undefined, error: message.error, response: typeof message.response === 'string' ? message.response.slice(0, 16001) : undefined })
@@ -2942,7 +2976,7 @@ const HANDLERS = {
     const id = deferredRevivalId(message.id);
     if (!id) return { ok: false, error: 'bad_command_id' };
     const senderTabId = Number.isInteger(source?.tab) ? source.tab : null;
-    const remembered = await rememberDeferredRevival(id, conversationId);
+    const remembered = await rememberDeferredRevival(id, conversationId, true);
     if (remembered && senderTabId !== null) deferredRevivalOffers.set(id, senderTabId);
     return remembered ? { ok: true, deferred: true } : { ok: false, error: 'bad_command_id' };
   },
@@ -3204,9 +3238,8 @@ function deferredRevivalUrl(entry) {
  * reason this decision lives here rather than in the app.
  *
  * The offer is spent by the app on handout, so this runs once per command; a second poll, from
- * this tab or another tab of the same chat, is never given the same id. Nothing is retried
- * locally either — when no redeem arrives the app opens it the old way, which is the only
- * recovery that still works if this window is closing.
+ * this tab or another tab of the same chat, is never given the same id. Missing redemption
+ * ends at the command deadline; it never grants another browser-opening attempt.
  */
 /** Only the continuation's captured Project chooses a successor's scope. */
 function successorChatBase(offered) {
@@ -3245,8 +3278,8 @@ async function placeSuccessorChat(raw, tabId) {
   try {
     home = await chrome.tabs.get(tabId);
   } catch {
-    // The polling tab closed between its request and this reply. Nothing here can place a
-    // window-bound tab without it, and the app's fallback is what covers exactly this.
+    // The polling tab closed between its request and this reply. Its operation has spent
+    // opening authority, so the command deadline reports the unsuccessful placement.
     return;
   }
   if (!home || typeof home.windowId !== 'number') return;
@@ -3346,6 +3379,10 @@ function recoverDeferredRevivals() {
       const exact = tabs
         .filter((tab) => tab && typeof tab.id === 'number' && conversationForTab(tab) === entry.conversationId)
         .sort((a, b) => a.id - b.id);
+      if (!entry.openingSpent) {
+        entry.openingSpent = true;
+        await persistLive();
+      } else if (!exact.length) continue;
       let routed = false;
       for (const tab of exact) {
         if (await restoreChatgptTab(tab.id)) {
@@ -3365,8 +3402,8 @@ function recoverDeferredRevivals() {
         const created = await chrome.tabs.create({ url, active: false });
         if (created && typeof created.id === 'number') tabs.push({ ...created, url });
       } catch {
-        // Browser policy/window teardown can reject create; the local marker remains for the next
-        // browser/service-worker lifetime instead of turning that transport failure into a wake failure.
+        // Opening authority stays spent even if Chrome rejects creation. The app's command
+        // deadline reports failure; a browser/service-worker restart cannot mint another tab.
       }
     }
   })();

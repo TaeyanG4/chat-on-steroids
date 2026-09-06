@@ -258,6 +258,7 @@ export type SessionEvent =
       inputDelivery?: 'offered' | 'confirmed';
       /** Original app-authored text, excluding transport-only control instructions. */
       authoredText?: string;
+      attachments?: import('./input.js').InputAttachment[];
       assets?: AssetRef[];
       /** First sequence assigned to this stable website message; revisions keep this anchor. */
       origin?: number;

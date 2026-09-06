@@ -25,6 +25,14 @@ Read bounded account-evaluated model metadata and installed tool declarations th
 MAIN-world bridge. Do not infer availability from English labels or fixed release names, sweep every
 effort to discover a catalog, or add polling/fallback openers around an uncertain observation.
 
+Native attachments have one staging owner in `session/input-attachments.ts`: immutable originals,
+bounded thumbnails, serialized quota/pruning/admission and opaque IDs. The outbox owns membership;
+the bridge serves bounded chunks only to that exact pre-send browser claim. Never expose source
+paths or inject a file reference as though its bytes reached ChatGPT. Final Send must recheck the
+same text, attachment nodes and navigation epoch after every asynchronous authorization step.
+Pending plan stages are projected from the first durable input until its receipt materializes the
+queue. Temporary planner tabs retire after capture/cancellation only with exact idle/draft proof.
+
 
 **This tree is usually dirty and shared with the user and other agents — never `reset`,
 `checkout`, `clean`, reformat, or overwrite work you did not do.**
@@ -86,8 +94,9 @@ Four runtime planes, only two of which are servers:
 
 **The MCP server and the browser bridge are two different servers with two different
 threat models.** MCP is the model's capability endpoint. The bridge exists only for the
-Chrome extension and deliberately has no route that reads a file, runs a command, or
-changes a permission. Never merge their lifecycles or their auth.
+Chrome extension and has no arbitrary filesystem, command or permission authority. Its attachment
+route serves only immutable user-selected staging bytes belonging to an exact claimed input.
+Never merge their lifecycles or their auth.
 
 The extension never executes a tool. It observes ChatGPT and reports evidence. **The app is
 the only authority on what a local tool actually did.** The renderer has no Node, no
