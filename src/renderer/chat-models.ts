@@ -34,15 +34,12 @@ export function applyComposerSessionModel(scope: string | null, observation: Obs
   paintComposerContext(); paintStatus();
 }
 
-/** Composer scope is Sol through Astra, with only observed non-Instant power levels. */
+/** Provider order and available efforts define the slider, including newly released models. */
 function composerModels() {
   if (catalog.state !== 'ready') return [];
-  const rank = (label: string) => /^gpt[ -]?5\.6(?:[ -](?:sol|pro))?$/i.test(label) ? 0
-    : /^(?:gpt[ -]?6(?:\.0)?(?:[ -](?:pro|astra))?|astra)$/i.test(label) ? 1 : -1;
-  return catalog.models.filter(model => rank(model.label) >= 0)
+  return catalog.models
     .map(model => ({ ...model, efforts: composerEfforts.filter(effort => model.efforts.includes(effort)) }))
-    .filter(model => model.efforts.length > 0)
-    .sort((a, b) => rank(a.label) - rank(b.label));
+    .filter(model => model.efforts.length > 0);
 }
 
 function options(select: HTMLSelectElement, choices: Array<{ id: string; label: string }>, value: string): void {

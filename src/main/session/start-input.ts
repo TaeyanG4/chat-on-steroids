@@ -9,10 +9,10 @@ let waking: { lastSeenAt: number | null; work: Promise<void>; failed: boolean } 
 /** One browser startup per absence episode, shared by authored sends and read-only discovery. */
 export async function wakeBrowserUrl(url: string, retry = false, backgroundStartup = false): Promise<void> {
   const browser = await bridgeStatus();
-  // Closing Chrome (including its last helper window) disconnects the live wake
-  // transport immediately while its last HTTP sighting stays "present" for a minute.
-  // Only an authenticated live transport can receive this newly published work.
-  if (browserWakeConnected()) { waking = null; return; }
+  // A disconnected wake socket does not prove Chrome is absent. HTTP presence
+  // means its existing worker owns reconnection and pending work; do not race it
+  // with an OS opener. Only a confirmed absence admits a startup.
+  if (browserWakeConnected() || browser.present) { waking = null; return; }
   if (retry && waking?.failed) waking = null;
   // Until the extension registers, another explicit send belongs to the same startup.
   // Its outbox entry will be discovered by normal maintenance once Chrome is ready.

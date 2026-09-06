@@ -52,7 +52,6 @@ const {
   setBrowserOpener,
   shutdownBridge,
   STALE_SWARM_MS,
-  BROWSER_PLACEMENT_MS,
   CHAT_SILENCE_MS,
   GOAL_QUIET_MS,
   GOAL_SILENCE_LISTEN_MS,
@@ -548,6 +547,8 @@ describe('active agent tab discard projection', () => {
         noteAgentAlive(chats[0], 'page'); // periodic page presence must not renew idle work
         const quiet = (await request('POST', '/status', { body: { openConversations: chats } })).body;
         expect(quiet.closableConversations).toEqual(expect.arrayContaining(chats.slice(0, 2)));
+        expect(quiet.retiredConversations).toEqual(expect.arrayContaining(chats.slice(0, 2)));
+        expect(quiet.retiredConversations).not.toContain(chats[2]);
         setChatBlocked(chats[2]!, true);
         const newlyBlocked = (await request('POST', '/status', { body: { openConversations: chats } })).body;
         expect(newlyBlocked.blockedConversations).toContain(chats[2]);
@@ -3973,7 +3974,7 @@ ${SAMPLE_BRIEF}` }
     expect(opened).toEqual([commandUrl(command.id)]);
   });
 
-  it('falls back to the OS when the browser it was handed to never opens the tab', async () => {
+  it('never issues a second open while the handed-out browser tab is still hydrating', async () => {
     vi.useFakeTimers();
     try {
       await pair();
@@ -3981,11 +3982,11 @@ ${SAMPLE_BRIEF}` }
       expect(stored.body.placement).not.toBeNull();
       expect(opened).toEqual([]);
 
-      // The page took the offer and died before it could create the tab — a window closing, an
-      // extension too old to understand the field. Nothing redeems, so the command is opened
-      // the old way well inside its own ninety-second deadline rather than expiring unopened.
-      await vi.advanceTimersByTimeAsync(BROWSER_PLACEMENT_MS + 1);
-      expect(opened).toEqual([commandUrl(stored.body.commandId as string)]);
+      // No receipt yet is ambiguous: a slow provider page can already own a real tab.
+      await vi.advanceTimersByTimeAsync(20_001);
+      expect(opened).toEqual([]);
+      expect((await request('GET', `/activity?conversationId=${HOME}`)).body.placement).toBeNull();
+      expect((await redeem(stored.body.commandId)).type).toBe('resume');
     } finally {
       vi.useRealTimers();
     }

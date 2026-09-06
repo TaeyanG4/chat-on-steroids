@@ -1,7 +1,7 @@
-> [!IMPORTANT]
-> **Set ChatGPT to English!!!!**
+> [!NOTE]
+> **Workaround for the published 2.0.6 build**
 >
-> Set ChatGPT's interface language to **English**, then reload your ChatGPT tabs and retry model discovery in Chat On Steroids. The current model-picker integration relies on English UI labels. Other languages can leave the model list empty even when the extension is connected and all setup checks are green.
+> Set ChatGPT's interface language to **English**, then reload your ChatGPT tabs and retry model discovery in Chat On Steroids. That release's model-picker integration relies on English UI labels. The current source fixes this; see [Browser behavior](#browser-behavior-in-the-current-source). Other languages can leave the model list empty even when the extension is connected and all setup checks are green.
 >
 > **Quick fix if the model picker isn't showing:**
 >
@@ -152,7 +152,7 @@ Finish reminders are added by the delivery layer, separate from the visible plan
 
 One prime chat can open up to eight worker chats (two by default) and exchange brokered messages with them through the `agents` tool. Provider rate limits still apply. Workers cannot talk to each other.
 
-Workers are reusable conversations. When one reports its result it goes to sleep, frees its slot and keeps its full chat. Messaging it again wakes the same conversation. At about 400k recorded tokens a worker becomes non-revivable after its next stop; workers never compact themselves. With background chats enabled, app-managed tabs share one browser window. Idle tabs remain open up to the configured worker capacity; above it, the oldest inactive work is eligible for closure after one minute. Active chats and unsent drafts remain protected.
+Workers are reusable conversations. When one reports its result it goes to sleep, frees its slot and keeps its full chat. Messaging it again wakes the same conversation. At about 400k recorded tokens a worker becomes non-revivable after its next stop; workers never compact themselves. With background chats enabled, app-managed tabs share one browser window. Sleeping and finished worker tabs become eligible for closure after one minute, even below the worker limit. This releases browser memory while preserving the reusable conversation. Active chats and unsent drafts remain protected.
 
 Each prime owns its worker history. If the last worker sleeps, the run is parked and another chat can start its own workers; the original prime still sees its full history in `agents action=status`, can spawn fresh workers, and can wake old ones when the execution slot is free. Turning multi-agent off pauses execution and keeps that history. **Clear swarm** is what discards it.
 
@@ -178,8 +178,18 @@ Report vulnerabilities privately per [`SECURITY.md`](SECURITY.md).
 
 The MCP connector uses ChatGPT's documented Developer mode and Secure MCP Tunnel path. The extension is different: it observes ChatGPT's web UI, records rendered conversation state locally, and multi-agent mode opens and types into extra ChatGPT tabs. None of that is a documented public automation API. Depending on your account, OpenAI's [terms and policies](https://openai.com/policies/) on automated access, rate limits and permitted use may apply. Read the agreement that governs your account before using the extension or multi-agent mode, and do not use these features to scrape ChatGPT, evade limits or bypass safety controls.
 
+## Browser behavior in the current source
+
+The published 2.0.6 build's English-language and nested-picker workaround remains relevant until you install a build containing these fixes. The current source reads account-evaluated model IDs, available efforts and version choices instead of English picker labels. New model families appear after **Reload ChatGPT models**, provided ChatGPT exposes them to your account in the supported picker structure. Discovery restores the previous selection and sends no message.
+
+Opening the app reuses an idle ChatGPT tab for its initial observation when the browser is already present; showing the window again does not refresh a ready catalog or open Chrome. Explicit model reloads also reuse suitable tabs. A pending operation keeps its selected tab through settings navigation and extension-worker suspension. A slow page or missing receipt never authorizes a second OS open.
+
+In **Chat settings → Browser & history**, enable **Browser only** to prevent automatic plugin-refresh and recovery operations from creating tabs. Existing eligible tabs can still be used; explicit new chats, workers and model reloads retain their normal behavior. Closing a helper does not restart the same operation every maintenance cycle. Connector refresh verifies the installed App ID and complete tool declarations, and clicks Refresh only after the app has durably claimed a changed schema.
+
 ## Troubleshooting
 
+- **A new ChatGPT tab every half minute:** this is a bug, not normal operation. The current source fixes repeated helper ownership loss and duplicate opening after slow browser handoffs. Browser only also disables automatic helper creation.
+- **A folder cannot be listed:** use the actual virtual path shown for your approved folder. `/folder` is an example, not an automatically configured root. Confirm the Core plugin is installed and the folder is approved in the app.
 - **Tools missing or stale after a permission change:** tool-schema changes schedule a connector refresh after a 20-second debounce. If it fails, refresh the custom app in ChatGPT; this is separate from reloading the companion extension.
 - **Extension says app not found:** recording or multi-agent mode must be on for the bridge to run. Then reopen the popup.
 - **Extension version mismatch:** reload the unpacked extension after every app update.

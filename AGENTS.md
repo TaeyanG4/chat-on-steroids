@@ -15,6 +15,17 @@ it architecturally cleaner and preferably smaller than before.
 
 **Rule: no build up; rewrite with the new feature in mind.**
 
+**Browser efficiency rules.** Opening the app, a suspended MV3 wake socket and a maintenance
+alarm are not permission to open a tab. Reuse a suitable existing document. One operation owns
+one elected tab across provider navigation and MV3 suspension; a missing receipt or a user-closed
+tab must not create a new opening attempt. Transfer opening authority at handout, not after page
+hydration. Keep broker worker reuse independent of tab retention: sleeping/finished workers can
+release their renderer after one minute, subject to the existing draft/generation/document checks.
+Read bounded account-evaluated model metadata and installed tool declarations through the existing
+MAIN-world bridge. Do not infer availability from English labels or fixed release names, sweep every
+effort to discover a catalog, or add polling/fallback openers around an uncertain observation.
+
+
 **This tree is usually dirty and shared with the user and other agents — never `reset`,
 `checkout`, `clean`, reformat, or overwrite work you did not do.**
 
@@ -461,7 +472,7 @@ first?**
 | resumed first answer missed by Goal | `content.js::rememberResumeGoalPending()` / `bindResumeGoalTurn()` | `maybeRecoverResumeGoalTurn()` → exact single resume-user-turn + final/Fiber proof → ordinary `noteGoalTurn()`; synthetic `g-resume-<commandId>` is only a stable local turn id when no observed generation id exists |
 | worker lifecycle | `tools-core.ts` `agents` action dispatch | `agents.ts::stageSpawn()` / `stageMessages()` / `stageFinishAgent()` → `persistCriticalSwarmNow()` → staged commit/rollback → bridge worker/revive commands → `background.js::recoverDeferredRevivals()` → exact page liveness back into `agents.ts` |
 | browser command delivery | worker producers `bridge.ts::queueWorkerBootstrap()` / `queueWorkerRevival()`; **resume production** is bridge POST `/compact` after `continuation.ts::attachSummary()` → private `queueResumeCommand()` | durable command owner/lease → `/commands/redeem` / `/commands/ack` → `background.js::redeemCommand()` / `ackCommand()` → content send → receipt/recovery in `restoreCommands()`; exported `queueResume()` is a test/older-caller convenience wrapper, and private generic `queue()` is storage plumbing — neither is the semantic resume entrypoint |
-| which browser opens a fresh chat | `bridge.ts::offerPlacement()` / `pendingBrowserPlacement()` → `background.js::placeSuccessorChat()` | the `/compact` reply that produced the command carries `placement`, and chat A's own browser creates chat B in chat A's window; `openFreshChatInBrowser()` is the fallback after `BROWSER_PLACEMENT_MS` and the only path for a resume no page asked for |
+| which browser opens a fresh chat | `bridge.ts::offerPlacement()` / `pendingBrowserPlacement()` → `background.js::placeSuccessorChat()` | the `/compact` reply that produced the command carries `placement`, and chat A's own browser creates chat B in chat A's window; `pendingBrowserPlacement()` spends opening authority on handout, before hydration; no timer may issue a second OS open. `openFreshChatInBrowser()` handles a resume with no waiting browser collector |
 | extension document/conversation identity | `background.js::authorizeDocument()` / `registerDocument()` / `ownsDocument()` | `noteTabConversation()` + `chatgpt-dom.js::conversationFromPath()` / `conversationId()`; React-only evidence begins at `fiber.js::scan()` |
 | page observation commit | bridge POST `/events` | exact lost-worker-ACK recovery + `noteAgentAlive()` → `recorder.ts::recordChatObservations()` → durable Goal reply obligation → browser-recovery activity → context ceiling → staged/durable worker final → HTTP 200 lets extension journal retire the batch |
 | Overwrite / native ChatGPT presentation | `content.js::renderStreams()` | `websiteRenderForTurn()` + `completeReplacementForTurn()` + `hasUnrepresentedFiberCall()` → `chatgpt-dom.js::replaceActivity()` / `hideProgress()`; exact Fiber/page identities decide whether local activity is complete enough to replace native activity, while ChatGPT always keeps answer/code/actions |

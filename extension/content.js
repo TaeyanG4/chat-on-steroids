@@ -9867,11 +9867,19 @@
   }
   function waitPageView(read, current, milliseconds) {
     return new Promise(resolve => {
-      let observer, timer;
-      const finish = value => { observer?.disconnect(); clearTimeout(timer); resolve(value); };
-      const check = () => { if (!current()) return finish(null); const value = read(); if (value) finish(value); };
-      observer = new MutationObserver(check); observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
-      timer = setTimeout(() => finish(null), milliseconds); check();
+      let busy = false, dirty = false, done = false;
+      const finish = value => { if (done) return; done = true; observer.disconnect(); clearTimeout(timer); resolve(value); };
+      const check = async () => {
+        if (done) return;
+        if (!current()) return finish(null);
+        if (busy) { dirty = true; return; }
+        busy = true;
+        try { let value = read(); if (value?.then) value = await value; if (current() && value) finish(value); }
+        catch { finish(null); }
+        finally { busy = false; if (dirty && !done) { dirty = false; void check(); } }
+      };
+      const observer = new MutationObserver(check); observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+      const timer = setTimeout(() => finish(null), milliseconds); void check();
     });
   }
   async function refreshManagedPlugin(request) {
@@ -9897,22 +9905,22 @@
         // The provider's installed-row navigation drops the query marker. This
         // already-owned discovery may learn its resulting exact App Id, but cannot
         // claim Refresh until the management document has its marker again.
-        const discovered = await waitPageView(() => {
+        const discovered = await waitPageView(async () => {
           const url = new URL(location.href);
           const route = /^#settings\/Plugins\/plugin_(asdk_app_[a-zA-Z0-9_-]+)$/.exec(url.hash);
-          const next = CLF_DOM.pluginRefreshView(request.connectorName, request.tools);
+          const next = await CLF_DOM.pluginRefreshView(request.connectorName, request.tools);
           return route && next?.appId === route[1] ? url.href : null;
         }, () => alive && epoch === requestEpoch && !generating && !CLF_DOM.generating() &&
           new URL(location.href).origin === 'https://chatgpt.com' && location.pathname === '/' && CLF_DOM.pluginManagementIdle(), 8000);
         if (!discovered || !alive || epoch !== requestEpoch || location.href !== discovered) return false;
         const url = new URL(discovered); url.searchParams.set('cos-plugin-refresh', request.id);
-        location.replace(url.href); return true;
+        history.replaceState(history.state, '', url.href); return true;
       }
       // Identity and Refresh paint before the tool declarations. A partial settings
       // panel is neither an old schema nor permission to click; wait on the existing
       // DOM observer and leave an unclaimed request available if hydration times out.
-      const view = await waitPageView(() => {
-        const next = CLF_DOM.pluginRefreshView(request.connectorName, request.tools, request.appId);
+      const view = await waitPageView(async () => {
+        const next = await CLF_DOM.pluginRefreshView(request.connectorName, request.tools, request.appId);
         const route = /^#settings\/Plugins\/plugin_(asdk_app_[a-zA-Z0-9_-]+)$/.exec(new URL(location.href).hash);
         return route && next?.appId === route[1] && Array.isArray(next.tools) && next.tools.length > 0 ? next : null;
       }, current, 8000);
@@ -9920,16 +9928,16 @@
       if (!current()) return false;
       if (!view || (request.appId && view.appId !== request.appId) || !view.refresh || view.refresh.disabled) { await fail('Exact connector settings or Refresh control could not be verified'); return false; }
       const ownedEpoch = epoch, appId = view.appId;
-      const stillCurrent = () => current() && epoch === ownedEpoch && CLF_DOM.pluginRefreshView(request.connectorName, request.tools, appId)?.appId === appId;
+      const stillCurrent = () => current() && epoch === ownedEpoch && new URL(location.href).hash === `#settings/Plugins/plugin_${appId}`;
       const before = schemaKey(view.tools), expected = schemaKey(request.tools);
       if (before === expected) {
         return (await ask({ type: 'plugin_refresh', action: 'current', id: request.id, appId, connectorName: request.connectorName, tools: view.tools }))?.data?.ok === true && stillCurrent();
       }
       const claimed = await ask({ type: 'plugin_refresh', action: 'claim', id: request.id, appId, connectorName: request.connectorName, tools: view.tools });
-      if (!claimed?.data?.ok || !stillCurrent()) { await fail('Connector refresh claim or page ownership was not confirmed'); return false; }
+      if (!claimed?.data?.ok || !stillCurrent() || view.refresh.isConnected === false || view.refresh.disabled) { await fail('Connector refresh claim or page ownership was not confirmed'); return false; }
       view.refresh.click(); // the durable main-process attempt owns this one click
-      const after = await waitPageView(() => {
-        const next = CLF_DOM.pluginRefreshView(request.connectorName, request.tools, appId);
+      const after = await waitPageView(async () => {
+        const next = await CLF_DOM.pluginRefreshView(request.connectorName, request.tools, appId);
         return next && before !== expected && schemaKey(next.tools) === expected ? next : null;
       }, stillCurrent, 12000);
       if (!after) { await fail('Refresh was requested, but a changed matching schema was not observed'); return false; }

@@ -50,6 +50,28 @@ async function worker(inputs: Array<{ id: string; conversationId: string | null 
 }
 
 describe('one browser maintenance flight per desktop outbox publication', () => {
+  it('never opens a helper for passive model observation, including repeated maintenance', async () => {
+    const h = await worker([]);
+    const request = { nonce: firstId, expiresAt: Date.now() + 60000, allowOpen: false };
+    await h.inspectModels(request, true); await h.inspectModels(request, true);
+    expect(h.create).not.toHaveBeenCalled();
+    h.tabs.push({ id: 8, url: `https://chatgpt.com/c/${secondId}` });
+    await h.inspectModels(request, true);
+    expect(h.sendMessage).toHaveBeenCalledWith(8, expect.objectContaining({ type: 'clf-model-catalog' }));
+    expect(h.create).not.toHaveBeenCalled();
+  });
+  it('retains model discovery custody when a user closes its elected tab', async () => {
+    const h = await worker([]);
+    const request = { nonce: firstId, expiresAt: Date.now() + 60000 };
+    await h.inspectModels(request, true);
+    expect(h.create).toHaveBeenCalledTimes(1);
+    h.tabs.length = 0;
+    await h.inspectModels(request, true); await h.inspectModels(request, true);
+    expect(h.create).toHaveBeenCalledTimes(1);
+    // Only a new explicit request can authorize another tab.
+    await h.inspectModels({ ...request, nonce: secondId }, true);
+    expect(h.create).toHaveBeenCalledTimes(2);
+  });
   it('does not close a temporary planner when its answer is accepted', async () => {
     const h = await worker([]);
     const url = `https://chatgpt.com/?temporary-chat=true&cos-input=${firstId}`;

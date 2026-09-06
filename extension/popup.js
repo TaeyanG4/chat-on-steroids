@@ -12,21 +12,6 @@
  */
 
 const $ = (id) => document.getElementById(id);
-// This explicit action runs in the freshly opened popup, never through the worker
-// it is meant to replace. It therefore remains usable when that worker is stale
-// or its status/connection requests never return.
-$('reloadBtn').addEventListener('click', () => {
-  const button = $('reloadBtn');
-  if (button.disabled) return;
-  button.disabled = true;
-  $('reloadStatus').textContent = 'Reload requested. Reopen this popup to verify the connection.';
-  try {
-    chrome.runtime.reload();
-  } catch (error) {
-    button.disabled = false;
-    $('reloadStatus').textContent = `Reload failed: ${error instanceof Error ? error.message : String(error)}`;
-  }
-});
 const RENDER_STREAM_KEY = 'renderStreamEnabled';
 const SHOW_TIMES_KEY = 'showStreamTimes';
 const POLL_MS = 1500;

@@ -12,7 +12,7 @@ import { startChatModelDiscovery } from './chat-models.js';
 import { initLogFile, logError, logInfo, logWarn } from './logger.js';
 import { unifiedExecManager } from './codex/manager.js';
 import { initSecretsPath } from './secrets.js';
-import { setBrowserOpener, setBrowserWorkArea, shutdownBridge, startBridge } from './bridge.js';
+import { bridgeStatus, setBrowserOpener, setBrowserWorkArea, shutdownBridge, startBridge } from './bridge.js';
 import { flushSessions, initSessionStore, pruneSessions } from './session/store.js';
 import {
   flushRecorder,
@@ -117,10 +117,12 @@ function createWindow(): void {
     }
   });
 
-  // A tray close keeps this process alive. Warm the same account-owned catalog
-  // whenever the window actually becomes visible, not just on process startup.
+  // Observe once through an already open browser. Reopening a window never opens
+  // Chrome or refreshes a ready catalog; explicit Reload models owns that action.
   window.on('show', () => {
-    if (!quitting) void startChatModelDiscovery().catch(error => logWarn(`model discovery on window open: ${error.message}`));
+    if (!quitting) void bridgeStatus().then(status => {
+      if (!quitting && status.present) return startChatModelDiscovery(false);
+    }).catch(error => logWarn(`model discovery on window open: ${error.message}`));
   });
   window.once('ready-to-show', () => {
     // A renderer can finish loading after Cmd+Q has already entered bounded teardown. Never let

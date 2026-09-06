@@ -40,18 +40,22 @@ describe('native window activation', () => {
     ready(); expect(showWindow).toHaveBeenCalledTimes(1);
     launch.quitting = true; ready(); expect(showWindow).toHaveBeenCalledTimes(1);
   });
-  it('starts background catalog discovery on each actual show, including tray reopen, and never during quit', async () => {
+  it('requests only passive catalog observation on show with browser presence, never during quit or absence', async () => {
     const source = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8');
     const listener = source.slice(source.indexOf("  window.on('show'"), source.indexOf("  window.once('ready-to-show'"));
     let show!: () => void;
     const start = vi.fn(async () => ({}));
+    let present = false;
     const context = vm.createContext({ window: { on: (event: string, callback: () => void) => {
       expect(event).toBe('show'); show = callback;
-    } }, quitting: false, startChatModelDiscovery: start, logWarn: vi.fn() });
+    } }, quitting: false, bridgeStatus: async () => ({ present }), startChatModelDiscovery: start, logWarn: vi.fn() });
     vm.runInContext(listener, context);
+    show(); await Promise.resolve(); expect(start).not.toHaveBeenCalled();
+    present = true;
     show(); await Promise.resolve();
     show(); await Promise.resolve();
     expect(start).toHaveBeenCalledTimes(2);
+    expect(start).toHaveBeenCalledWith(false);
     context.quitting = true;
     show();
     expect(start).toHaveBeenCalledTimes(2);

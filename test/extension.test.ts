@@ -778,7 +778,7 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
    * app does it. `asked` records what a receipt actually quoted, so a test can tell the
    * difference between a pass that reported the repair and one that reported something else.
    */
-  function appWith(repair: string | null) {
+  function appWith(repair: string | null, browserOnly = false) {
     const asked: string[] = [];
     const actions: string[] = [];
     const failedActions: string[] = [];
@@ -802,13 +802,29 @@ describe('exact chat recovery from a fresh Chrome tab scan', () => {
         if (repaired && repaired === token) outstanding = null;
         if (!outstanding) return response(200, { ok: true, repairs: [] });
         token = `tok-${(minted += 1)}`;
-        return response(200, { ok: true, repairs: [{ conversationId: outstanding, token }] });
+        return response(200, { ok: true, browserOnly, repairs: [{ conversationId: outstanding, token }] });
       }
       return response(404, {});
     });
     return { fetch, asked, actions, failedActions, arm: (id: string) => { outstanding = id; } };
   }
 
+  it('browser-only recovery waits for the missing chat and then reloads its exact existing tab', async () => {
+    const { fetch, asked } = appWith(OTHER, true);
+    const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
+    await worker.registerTab(41);
+    await worker.send({ type: 'bind', conversationId: CHAT }, 41);
+    await worker.fireAlarm(); await worker.fireAlarm();
+    expect(worker.tabsCreate).not.toHaveBeenCalled();
+    expect(worker.tabsReload).not.toHaveBeenCalled();
+    expect(asked.every(item => item === 'status')).toBe(true);
+    await worker.registerTab(42);
+    await worker.send({ type: 'bind', conversationId: OTHER }, 42);
+    await worker.fireAlarm();
+    expect(worker.tabsReload).toHaveBeenCalledWith(42);
+    expect(worker.tabsCreate).not.toHaveBeenCalled();
+    expect(asked).toContain(`repaired:${OTHER}`);
+  });
   it('reloads the exact tab holding the chat the app named, and reports it once', async () => {
     const { fetch, asked, actions } = appWith(CHAT);
     const worker = loadWorker({ local: new FakeStorageArea(paired), session: new FakeStorageArea(), fetch });
@@ -1155,13 +1171,13 @@ describe('active agent tab discard protection', () => {
 
 describe('app-owned retained tab pool', () => {
   const id = (n: number) => `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}`;
-  async function budget(options: { safe?: (tab: number) => boolean; changed?: number; keep?: number; recent?: number; protectDuplicate?: boolean; reverseActivity?: boolean } = {}) {
+  async function budget(options: { safe?: (tab: number) => boolean; changed?: number; keep?: number; recent?: number; protectDuplicate?: boolean; reverseActivity?: boolean; retired?: boolean } = {}) {
     const tabs = [1, 2, 3, 4, 5, 6].map(n => ({ id: n, windowId: n === 5 ? 9 : 7, url: `https://chatgpt.com/c/${id(n === 4 ? 3 : n)}`, active: n === 5, lastAccessed: n === options.recent ? Date.now() : 0 }));
     const worker = loadWorker({
       local: new FakeStorageArea({ port: 8765, token: 'paired-token' }),
       session: new FakeStorageArea({ tabDocuments: Object.fromEntries(tabs.map(tab => [tab.id, `doc-${tab.id}`])), tabEpochs: Object.fromEntries(tabs.map(tab => [tab.id, 0])) }),
       fetch: async input => response(200, new URL(input).pathname === '/hello' ? { app: 'chat-on-steroids', paired: true } : {
-        ok: true, repairs: [], tabsToKeepOpen: options.keep ?? 2,
+        ok: true, repairs: [], tabsToKeepOpen: options.keep ?? 2, retiredConversations: options.retired ? [id(2), id(5)] : [],
         conversationActivityAt: Object.fromEntries([1, 2, 3, 5].map(n => [id(n), (options.reverseActivity ? 10 - n : n) * 1000])),
         managedConversations: [1, 2, 3, 5].map(id), nonDiscardableConversations: [id(1), ...(options.protectDuplicate ? [id(3)] : [])], closableConversations: options.keep === 20 ? [] : [2, 3, 5].map(id)
       }),
@@ -1178,6 +1194,12 @@ describe('app-owned retained tab pool', () => {
     expect(worker.tabsRemove.mock.calls.map(call => call[0])).toEqual([4, 2, 3]);
     expect(worker.tabsRemove).not.toHaveBeenCalledWith(1); // live app work
     expect(worker.tabsRemove).not.toHaveBeenCalledWith(6); // unrelated manual chat
+  });
+  it('retires sleeping workers below the pool limit while preserving drafts and live work', async () => {
+    const worker = await budget({ keep: 20, retired: true, safe: n => n !== 5 });
+    expect(worker.tabsRemove.mock.calls.map(call => call[0])).toEqual([4, 2]);
+    expect(worker.tabsRemove).not.toHaveBeenCalledWith(5);
+    expect(worker.tabsRemove).not.toHaveBeenCalledWith(1);
   });
   it('keeps idle conversations below the pool limit while removing an idle duplicate', async () => {
     const worker = await budget({ keep: 20 });

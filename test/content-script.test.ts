@@ -14520,9 +14520,11 @@ describe('app Stop command uses current native turn proof', () => {
     window.addEventListener('message', answer);
     try {
       prose(live.document, section, 'late-native-final', 'First words and the complete final answer.');
-      await new Promise(resolve => globalThis.setTimeout(resolve, 20));
-      await live.hook.flush();
-      expect(emitted(live.sent, 'assistant_message').some(row => row.event.text === 'First words and the complete final answer.')).toBe(true);
+      // Wait for the observed publication, not a 20ms scheduling guess under the full suite.
+      await vi.waitFor(async () => {
+        await live!.hook.flush();
+        expect(emitted(live!.sent, 'assistant_message').some(row => row.event.text === 'First words and the complete final answer.')).toBe(true);
+      }, { timeout: 1000, interval: 10 });
       expect(emitted(live.sent, 'turn_end')).toHaveLength(1);
       expect(live.document.visibilityState).toBe('hidden');
     } finally { window.removeEventListener('message', answer); window.setTimeout = instant; }

@@ -58,7 +58,7 @@ it('keeps a loading settings index pending and restores custody after its instal
   let buttons: Array<{ click: () => void }> | null = null;
   const location = { pathname: '/', href: `https://chatgpt.com/?cos-plugin-refresh=${id}#settings/Plugins`, replace };
   const context = vm.createContext({ URL, alive: true, generating: false, epoch: 1, ask,
-    location,
+    location, history: { replaceState: replace },
     CLF_DOM: { generating: () => false, pluginManagementIdle: () => true, pluginInstalledButtons: () => buttons,
       pluginRefreshView: () => ({ appId: 'asdk_app_synthetic' }) }
   });
@@ -68,7 +68,7 @@ it('keeps a loading settings index pending and restores custody after its instal
   expect(ask).not.toHaveBeenCalled(); // no durable missing-plugin verdict while loading
   buttons = [{ click: () => { location.href = 'https://chatgpt.com/#settings/Plugins/plugin_asdk_app_synthetic'; } }];
   expect(await run()).toBe(true);
-  expect(replace).toHaveBeenCalledExactlyOnceWith(`https://chatgpt.com/?cos-plugin-refresh=${id}#settings/Plugins/plugin_asdk_app_synthetic`);
+  expect(replace).toHaveBeenCalledExactlyOnceWith(undefined, '', `https://chatgpt.com/?cos-plugin-refresh=${id}#settings/Plugins/plugin_asdk_app_synthetic`);
   expect(ask).not.toHaveBeenCalled();
 });
 it('records an already current schema without clicking Refresh and invalidating old chats', async () => {
@@ -80,10 +80,10 @@ it('records an already current schema without clicking Refresh and invalidating 
 it('opens an enrolled exact App Id directly in marked settings without name discovery', async () => {
   const background = readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8');
   const code = background.slice(background.indexOf('let pluginRefreshFlight = null;'), background.indexOf('async function catalogProbe('));
-  const create = vi.fn();
+  const create = vi.fn(async () => ({ id: 9 }));
   const context = vm.createContext({ URL, setTimeout, clearTimeout, CHATGPT_TAB_URLS: ['https://chatgpt.com/*'],
     call: async () => ({ ok: true, data: { requests: [{ id, appId: 'asdk_app_synthetic', surface: 'core' }] } }), createChatTab: create,
-    chrome: { tabs: { query: async () => [] } }
+    chrome: { storage: { session: { get: async () => ({}), set: async () => {} } }, tabs: { query: async () => [] } }
   });
   vm.runInContext(`${code}\nglobalThis.run = inspectRequestedPluginRefresh;`, context);
   await (context.run as Function)([{ surface: 'core' }], true);
@@ -100,12 +100,12 @@ it('reuses one owned management tab and preserves unreachable helpers and user c
   const code = background.slice(background.indexOf('let pluginRefreshFlight = null;'), background.indexOf('async function catalogProbe('));
   let requests: object[] = [{ id }];
   const tabs = [{ id: 7, url: `https://chatgpt.com/?cos-plugin-refresh=${id}#settings/Plugins` }, { id: 8, url: 'https://chatgpt.com/c/user-conversation' }];
-  const create = vi.fn();
+  const create = vi.fn(async () => ({ id: 9 }));
   const remove = vi.fn();
   const sendMessage = vi.fn(async (): Promise<object> => ({ ok: true }));
   const context = vm.createContext({ URL, setTimeout, clearTimeout, CHATGPT_TAB_URLS: ['https://chatgpt.com/*'],
     call: async () => ({ ok: true, data: { requests } }), createChatTab: create,
-    chrome: { tabs: { query: async () => tabs, get: async (id: number) => tabs.find(tab => tab.id === id), remove, sendMessage } }
+    chrome: { storage: { session: { get: async () => ({}), set: async () => {} } }, tabs: { query: async () => tabs, get: async (id: number) => tabs.find(tab => tab.id === id), remove, sendMessage } }
   });
   vm.runInContext(`${code}\nglobalThis.run = inspectRequestedPluginRefresh;`, context);
   const run = () => (context.run as Function)([{ surface: 'core' }], true);

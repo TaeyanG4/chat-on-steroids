@@ -82,11 +82,10 @@ it('cancels a first send while waiting for connection without publishing or open
   expect(ports.enqueue).not.toHaveBeenCalled();
   expect(ports.open).not.toHaveBeenCalled();
 });
-it('starts a direct send immediately with fresh presence but a disconnected wake transport', async () => {
+it('leaves delivery with the existing browser while its wake transport reconnects', async () => {
   ports.browser = { connected: false, present: true, lastSeenAt: Date.now() };
   await sendDesktopInput(request);
-  expect(ports.open).toHaveBeenCalledTimes(1);
-  expect(ports.open.mock.calls[0]?.[0]).toContain(`cos-input=${request.id}`);
+  expect(ports.open).not.toHaveBeenCalled();
   expect(ports.rows[0]).toMatchObject({ state: 'queued', error: undefined });
 });
 it('preserves background placement for a cold authored send and its explicit retry', async () => {

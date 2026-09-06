@@ -26,12 +26,15 @@ it('retries a rejected launch only after explicit retry and keeps successful ret
   await wakeBrowserUrl('https://chatgpt.com/', true);
   expect(open).toHaveBeenCalledTimes(2);
 });
-it('opens immediately after the wake channel closes even while recent HTTP presence remains true', async () => {
+it('waits for real absence after the wake channel closes with recent HTTP presence', async () => {
   browser.present = true; browser.lastSeenAt = Date.now(); browser.connected = true;
   await wakeBrowserUrl('https://chatgpt.com/?cos-model-catalog=discovery');
   expect(open).not.toHaveBeenCalled();
-  browser.connected = false; // last model helper/Chrome window closed; no new HTTP sighting
+  browser.connected = false; // MV3 suspension or reconnect is not proof of browser absence
   await Promise.all([wakeBrowserUrl('https://chatgpt.com/?cos-input=first'), wakeBrowserUrl('https://chatgpt.com/?cos-input=second')]);
+  expect(open).not.toHaveBeenCalled();
+  browser.present = false;
+  await wakeBrowserUrl('https://chatgpt.com/?cos-input=first');
   expect(open).toHaveBeenCalledTimes(1);
   expect(open).toHaveBeenCalledWith('https://chatgpt.com/?cos-input=first');
 });

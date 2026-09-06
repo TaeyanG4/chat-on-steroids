@@ -2461,7 +2461,7 @@ function applyAutoCompactHint(config: Config): void {
 const CHAT_INPUTS = [
   'goalIncludeToolCalls',
   'planBackend',
-  'finishTool', 'finishAction', 'finishLeadMinutes', 'workerModel', 'workerReasoning', 'backgroundChats',
+  'finishTool', 'finishAction', 'finishLeadMinutes', 'workerModel', 'workerReasoning', 'backgroundChats', 'browserOnly',
   'goalBackend',
   'loopBackend',
   'helperModel', 'helperReasoning',

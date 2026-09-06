@@ -1447,6 +1447,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
               replacements: inputRows.filter(next => next.createdAt > row.createdAt && next.purpose !== 'decision')
                 .map(next => ({ id: next.id, conversationId: next.conversationId })) }))],
         background: getConfig().ui.backgroundChats === true,
+        browserOnly: getConfig().ui.browserOnly === true,
         browserWorkArea: browserWorkArea?.(),
         commands: commands.length,
         revival,
@@ -4682,16 +4683,6 @@ function commandHomeConversation(spec: CommandSpec): string | null {
 }
 
 /**
- * How long a placed chat is given to redeem before the OS opener is asked after all.
- *
- * The offer is collected in the very response that produced the command, so this is not a
- * wait for a poll — it is the browser's whole round trip: create the tab, load ChatGPT, run
- * the content script, redeem. Twenty seconds is generous for that and still leaves most of
- * `COMMAND_DEADLINE_MS` for the fallback open to succeed in.
- */
-export const BROWSER_PLACEMENT_MS = 20_000;
-
-/**
  * The chat whose own request is in flight right now.
  *
  * Compact & Resume is produced by chat A's page asking for it, so at the instant the command
@@ -4703,15 +4694,12 @@ export const BROWSER_PLACEMENT_MS = 20_000;
  */
 let placementCollector: string | null = null;
 
-/** The one fresh chat currently offered to its home page, and the fallback that outlives it. */
+/** The one fresh chat currently offered to its home page. */
 let placementOffer: { id: string; conversationId: string | null; model: string | null; reasoningEffort: ReasoningEffort | null } | null = null;
-let placementTimer: NodeJS.Timeout | null = null;
 
-/** Drops the standing offer and its fallback. Called by every path that ends a command. */
+/** Drops the standing offer. Called by every path that ends a command. */
 function clearPlacementOffer(): void {
   placementOffer = null;
-  if (placementTimer) clearTimeout(placementTimer);
-  placementTimer = null;
 }
 
 /**
@@ -4732,17 +4720,6 @@ function offerPlacement(command: Command): boolean {
     model: command.spec.type === 'worker' ? command.spec.model : null,
     reasoningEffort: command.spec.type === 'worker' ? command.spec.reasoningEffort : null
   };
-  placementTimer = setTimeout(() => {
-    placementTimer = null;
-    placementOffer = null;
-    // Still queued and still nobody's: the home page did not open it, so ask the OS after all.
-    const stale = commands.find((entry) => entry.id === command.id && entry.owner === null);
-    // A connected companion owns background placement. Falling back through the OS here
-    // raises Chrome even if its tab is merely still loading. The existing command deadline
-    // reports an unredeemed attempt; only an absent browser needs the cold-start opener.
-    if (stale && !(backgroundWorker && browserWakeConnected())) void openFreshChatInBrowser(stale);
-  }, BROWSER_PLACEMENT_MS);
-  placementTimer.unref?.();
   if (backgroundWorker) wakeBrowserWork();
   logInfo(`bridge: offering ${specKey(command.spec)} to ${home}'s own browser window`);
   return true;
@@ -4753,8 +4730,9 @@ function offerPlacement(command: Command): boolean {
  *
  * Spent on handout. The page that collects it is the page that opens the tab, and a second
  * poll - from another tab of the same chat, or the same tab a moment later - must not create
- * a second one. If that page fails to act, the fallback above is what recovers it, not a
- * repeated offer.
+ * a second one. Handout transfers opening authority, before hydration or redemption.
+ * A missing receipt cannot prove that Chrome did not create the tab. The existing command
+ * deadline reports failure; neither a timer nor another poll may issue a second open.
  */
 function pendingBrowserPlacement(conversationId: string | null): { id: string; model: string | null; reasoningEffort: ReasoningEffort | null; background?: true } | null {
   const offer = placementOffer;
@@ -5596,6 +5574,10 @@ async function browserTabPolicy(openConversations: Set<string>) {
     lastActivity.has(id) && Date.now() - lastActivity.get(id)! >= 60_000);
   return {
     idleCloseAfterMs: 60_000,
+    // Worker reuse is broker state, not a reason to retain an idle browser renderer.
+    // A later explicit message reopens that same conversation through existing delivery.
+    retiredConversations: [...new Set([...closableWorkerConversations(0).filter(id => idle.includes(id)), ...supersededSourceConversations()])]
+      .filter(id => openConversations.has(id) && !protectedChats.has(id)).sort(),
     tabsToKeepOpen: getConfig().multiAgent.maxWorkers,
     conversationActivityAt: Object.fromEntries(lastActivity),
     managedConversations: [...managed].sort(),

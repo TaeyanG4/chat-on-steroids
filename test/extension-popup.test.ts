@@ -18,24 +18,11 @@ function openPopup(reload: () => void) {
   return popup.window.document;
 }
 
-it('reloads directly once even when the old worker and preference reads never answer', () => {
+it('omits the debugging reload action even when the worker is unavailable', () => {
   const reload = vi.fn();
   const document = openPopup(reload);
-  const button = document.getElementById('reloadBtn') as HTMLButtonElement;
-  expect(button.closest('details')).toBeNull();
-  button.click(); button.click();
-  expect(reload).toHaveBeenCalledTimes(1);
-  expect(button.disabled).toBe(true);
-  expect(document.getElementById('reloadStatus')?.textContent).toContain('Reopen');
-});
-
-it('reports a synchronous Chrome reload failure and allows another explicit attempt', () => {
-  const reload = vi.fn().mockImplementationOnce(() => { throw new Error('Extension context invalidated'); });
-  const document = openPopup(reload);
-  const button = document.getElementById('reloadBtn') as HTMLButtonElement;
-  button.click();
-  expect(button.disabled).toBe(false);
-  expect(document.getElementById('reloadStatus')?.textContent).toContain('Extension context invalidated');
-  button.click();
-  expect(reload).toHaveBeenCalledTimes(2);
+  expect(document.getElementById('reloadBtn')).toBeNull();
+  expect(document.getElementById('reloadStatus')).toBeNull();
+  expect(script).not.toContain('chrome.runtime.reload');
+  expect(reload).not.toHaveBeenCalled();
 });

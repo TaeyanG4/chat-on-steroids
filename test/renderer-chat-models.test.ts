@@ -47,17 +47,17 @@ it('renders the two observed Pro generations separately and sends their exact se
   initChatModels(() => paintContextMeter(null, config, confirmedComposerModel()));
   applyChatModels(config); await Promise.resolve();
   const slider = dom.window.document.querySelector<HTMLInputElement>('#composerPowerChoices input')!;
-  slider.value = '1'; slider.dispatchEvent(new dom.window.Event('input'));
+  slider.value = '2'; slider.dispatchEvent(new dom.window.Event('input'));
   expect(dom.window.document.getElementById('composerModelLabel')!.textContent).toBe('GPT-5.6 Pro');
   expect(confirmedComposerModel()).toEqual({ model: 'gpt-5.6-sol', reasoningEffort: 'pro' });
   expect(dom.window.document.getElementById('contextMeterInfo')!.textContent).toContain('Auto-compaction off for Pro');
-  slider.value = '2'; slider.dispatchEvent(new dom.window.Event('input'));
+  slider.value = '0'; slider.dispatchEvent(new dom.window.Event('input'));
   expect(dom.window.document.getElementById('contextMeterInfo')!.textContent).toContain('Auto-compaction off for Pro');
   expect(dom.window.document.getElementById('contextMeterArc')!.getAttribute('stroke-dasharray')).toBe('0 37.7');
   expect(dom.window.document.getElementById('composerModelLabel')!.textContent).toBe('GPT-6 Pro');
   expect(slider.getAttribute('aria-valuetext')).toBe('GPT-6 Pro');
   expect(confirmedComposerModel()).toEqual({ model: 'gpt-6-pro', reasoningEffort: 'pro' });
-  slider.value = '0'; slider.dispatchEvent(new dom.window.Event('input'));
+  slider.value = '1'; slider.dispatchEvent(new dom.window.Event('input'));
   expect(dom.window.document.getElementById('contextMeterInfo')!.textContent).toMatch(/Auto-compaction at 400[,.]000 tokens/);
 });
 
@@ -157,7 +157,7 @@ it('offers only observed models, prefers supported GPT-6 High, and replaces a re
   expect([...select('composerReasoning').options].some(option => option.value === 'high')).toBe(false);
 });
 
-it('limits the stepped composer to observed Sol Low upwards and Astra without inventing Pro access', async () => {
+it('includes every observed model in provider order without a release-name allowlist', async () => {
   dom = new JSDOM(await readFile('src/renderer/index.html', 'utf8'));
   vi.stubGlobal('window', dom.window); vi.stubGlobal('document', dom.window.document);
   const models = [
@@ -170,18 +170,18 @@ it('limits the stepped composer to observed Sol Low upwards and Astra without in
   initChatModels(); applyChatModels({ multiAgent: {}, goal: {} } as Config); await Promise.resolve();
   const doc = dom.window.document;
   const slider = doc.querySelector<HTMLInputElement>('#composerPowerChoices input')!;
-  expect(slider.max).toBe('3');
-  expect(doc.querySelectorAll('.power-dot')).toHaveLength(4);
+  expect(slider.max).toBe('6');
+  expect(doc.querySelectorAll('.power-dot')).toHaveLength(7);
   const header = doc.querySelector('.power-header')!;
   expect(header.querySelector('.power-icon') === null).toBe(true);
   expect(header.querySelector('#composerPowerTitle')).not.toBeNull();
   expect(header.querySelector('#composerPowerModel')).not.toBeNull();
   expect(header.querySelector('#refreshComposerModels')).not.toBeNull();
-  const expected = [['sol', 'low'], ['sol', 'medium'], ['sol', 'high'], ['astra', 'high']];
+  const expected = [['astra', 'high'], ['old', 'low'], ['old', 'high'], ['old', 'pro'], ['sol', 'low'], ['sol', 'medium'], ['sol', 'high']];
   for (const [index, [model, reasoningEffort]] of expected.entries()) {
     slider.value = String(index); slider.dispatchEvent(new dom.window.Event('input'));
     expect(confirmedComposerModel()).toEqual({ model, reasoningEffort });
-    expect(slider.getAttribute('aria-valuetext')).not.toMatch(/Instant|5\.5|Pro|Minimal/);
+    expect(slider.getAttribute('aria-valuetext')).not.toMatch(/Instant|Minimal/);
   }
   expect(doc.querySelector('.power-track')!.getAttribute('style')).toContain('--power-position: 100%');
   const effort = doc.getElementById('composerReasoning') as HTMLSelectElement;

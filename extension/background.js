@@ -1769,13 +1769,28 @@ let pluginRefreshFlight = null;
 function pluginRefreshMarker(tab) {
   try { const url = new URL(tab?.pendingUrl || tab?.url || ''); return url.origin === 'https://chatgpt.com' && url.pathname === '/' && /^#settings\/Plugins(?:\/plugin_asdk_app_[a-zA-Z0-9_-]+)?$/.test(url.hash) ? url.searchParams.get('cos-plugin-refresh') : null; } catch { return null; }
 }
-function inspectRequestedPluginRefresh(publications, background) {
+function inspectRequestedPluginRefresh(publications, background, browserOnly = false) {
   if (pluginRefreshFlight || !Array.isArray(publications) || !publications.length) return pluginRefreshFlight;
   pluginRefreshFlight = (async () => {
     const pending = await call('/plugin-refresh', { method: 'POST', body: JSON.stringify({ action: 'pending' }) });
     if (!pending.ok || !Array.isArray(pending.data?.requests)) return;
     const requests = pending.data.requests.slice(0, 2);
     const tabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
+    const saved = (await chrome.storage.session.get('pluginRefreshOwner')).pluginRefreshOwner;
+    const owner = saved && typeof saved.id === 'string' && Number.isInteger(saved.tab) ? saved : null;
+    // A provider SPA transition strips our query. The operation still owns the same
+    // tab: preserve that identity across MV3 suspension before inspecting its URL.
+    if (owner && requests.some(request => request.id === owner.id)) {
+      const current = await chrome.tabs.get(owner.tab).catch(() => null);
+      if (!current) return; // A user-closed helper is not permission to reopen it every poll.
+      if (pluginRefreshMarker(current) !== owner.id) {
+        const url = new URL(current.pendingUrl || current.url || '');
+        if (url.origin !== 'https://chatgpt.com' || url.pathname !== '/' || !/^#settings\/Plugins(?:\/plugin_asdk_app_[a-zA-Z0-9_-]+)?$/.test(url.hash)) return;
+        url.searchParams.set('cos-plugin-refresh', owner.id);
+        await chrome.tabs.update(current.id, { url: url.href });
+        return;
+      }
+    }
     for (const tab of tabs) {
       const id = pluginRefreshMarker(tab);
       if (!id || requests.some(request => request.id === id)) continue;
@@ -1788,7 +1803,11 @@ function inspectRequestedPluginRefresh(publications, background) {
     const held = tabs.find(tab => requests.some(request => request.id === pluginRefreshMarker(tab)));
     const request = requests.find(request => request.id === pluginRefreshMarker(held)) || requests[0];
     if (!held) {
-      try { await createChatTab(`https://chatgpt.com/?cos-plugin-refresh=${request.id}#settings/Plugins${request.appId ? `/plugin_${request.appId}` : ''}`, background); }
+      if (browserOnly) return;
+      try {
+        const tab = await createChatTab(`https://chatgpt.com/?cos-plugin-refresh=${request.id}#settings/Plugins${request.appId ? `/plugin_${request.appId}` : ''}`, background);
+        await chrome.storage.session.set({ pluginRefreshOwner: { id: request.id, tab: tab.id } });
+      }
       catch {
         // Preserve the pre-claim obligation and expose the failed browser boundary.
         // Swallowing this error made a due request look as if its wake never arrived.
@@ -1796,6 +1815,7 @@ function inspectRequestedPluginRefresh(publications, background) {
       }
       return;
     }
+    await chrome.storage.session.set({ pluginRefreshOwner: { id: request.id, tab: held.id } });
     let timer;
     try {
       await Promise.race([chrome.tabs.sendMessage(held.id, { type: 'clf-plugin-refresh', request }), new Promise(resolve => { timer = setTimeout(resolve, 25000); })]);
@@ -1821,19 +1841,26 @@ function inspectRequestedModels(request) {
   const wanted = request && /^[a-f0-9-]{36}$/i.test(request.nonce) && Number.isFinite(request.expiresAt) && Date.now() < request.expiresAt ? request : null;
   modelCatalogFlight = (async () => {
     const observed = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
+    const owner = wanted && (await chrome.storage.session.get('modelCatalogOwner')).modelCatalogOwner;
+    // One request retains its elected tab through MV3 suspension. A missing or
+    // navigated-away tab is an unfinished request, never another create instruction.
+    if (owner?.nonce === wanted?.nonce && Number.isInteger(owner?.tab) &&
+        !observed.some(tab => tab.id === owner.tab)) return;
     const tabs = wanted ? observed : observed.filter(tab => catalogTabNonce(tab));
     if (!wanted && tabs.length < 2) return;
     // Reuse a loaded idle document without navigation. A dedicated helper stays
     // warm between requests; its URL marker identifies ownership, not the request.
     tabs.sort((a, b) => Number(!!catalogTabNonce(b)) - Number(!!catalogTabNonce(a)) || a.id - b.id);
     const proofs = await Promise.all(tabs.map(candidate => catalogProbe(candidate.id, catalogTabNonce(candidate))));
-    let tab = tabs.find((_candidate, index) => proofs[index]?.ready === true);
+    let tab = tabs.find((candidate, index) => proofs[index]?.ready === true &&
+      (!owner || owner.nonce !== wanted?.nonce || candidate.id === owner.tab));
     if (wanted && Date.now() >= wanted.expiresAt) return;
     if (!wanted && !tab) return;
     if (!tab) {
       // An existing helper may be temporarily busy. Retain it and wait.
-      if (tabs.some(candidate => catalogTabNonce(candidate))) return;
+      if (wanted.allowOpen === false || owner?.nonce === wanted.nonce || tabs.some(candidate => catalogTabNonce(candidate))) return;
       tab = await createChatTab(`https://chatgpt.com/?cos-model-catalog=${wanted.nonce}`, true);
+      await chrome.storage.session.set({ modelCatalogOwner: { nonce: wanted.nonce, tab: tab.id } });
       await chrome.tabs.update(tab.id, { autoDiscardable: false });
       return;
     }
@@ -1860,6 +1887,7 @@ function inspectRequestedModels(request) {
       }
     };
     if (!wanted) { await retireDuplicates(); return; }
+    await chrome.storage.session.set({ modelCatalogOwner: { nonce: wanted.nonce, tab: tab.id } });
     modelCatalogTarget = { tab: tab.id, nonce: wanted.nonce, url: tab.url || tab.pendingUrl };
     let timer;
     try {
@@ -1932,6 +1960,7 @@ async function applyRequestedBrowserPreferences(request) {
 
 /** Retire idle app-owned documents and redundant copies, preserving exact unsent drafts. */
 async function pruneManagedTabs(tabs, policy, protectedChats, closable) {
+  const retired = new Set((Array.isArray(policy.retiredConversations) ? policy.retiredConversations : []).map(cleanConversationId).filter(Boolean));
   const managed = new Set((Array.isArray(policy.managedConversations) ? policy.managedConversations : []).map(cleanConversationId).filter(Boolean));
   for (const id of closable) managed.add(id);
   const blocked = new Set((Array.isArray(policy.blockedConversations) ? policy.blockedConversations : []).map(cleanConversationId).filter(Boolean));
@@ -1952,7 +1981,7 @@ async function pruneManagedTabs(tabs, policy, protectedChats, closable) {
     if (!Number.isInteger(tab.id)) continue;
     const duplicate = keeper.get(conversationId) !== tab.id && remaining.some(other => other.id !== tab.id && conversationForTab(other) === conversationId);
     if (protectedChats.has(conversationId)) continue;
-    if (!duplicate && (remaining.filter(owned).length <= keep || !closable.has(conversationId))) continue;
+    if (!duplicate && !retired.has(conversationId) && (remaining.filter(owned).length <= keep || !closable.has(conversationId))) continue;
     const source = { tab: tab.id, documentId: tabDocuments[String(tab.id)], navigationEpoch: tabEpochs[String(tab.id)] };
     if (!ownsDocument(source) || journalCountForConversation(conversationId) > 0) continue;
     try {
@@ -2000,7 +2029,7 @@ async function maintainOnce() {
   const backgroundReady = await reconcileBackgroundWindow(reply.data);
   if (reply.data.placement?.background === true) await placeSuccessorChat(reply.data.placement, null);
   inspectRequestedModels(reply.data.modelCatalogRequest);
-  inspectRequestedPluginRefresh(reply.data.pluginRefreshRequests, reply.data.background === true);
+  inspectRequestedPluginRefresh(reply.data.pluginRefreshRequests, reply.data.background === true, reply.data.browserOnly === true);
   await deliverDesktopInputs(reply.data.inputs, reply.data.background === true);
   if (!backgroundReady) await reconcileBackgroundWindow(reply.data);
   const monitoring = reply.data.recoveryMonitoring === true;
@@ -2101,6 +2130,7 @@ async function maintainOnce() {
       }
       if (target) await chrome.tabs.reload(target.id);
       else {
+        if (reply.data.browserOnly === true) continue;
         await createChatTab(`https://chatgpt.com/c/${encodeURIComponent(conversationId)}`, !focus && reply.data.background === true, focus);
       }
     } catch {

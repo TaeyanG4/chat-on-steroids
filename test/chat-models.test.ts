@@ -5,6 +5,17 @@ const models = [{ id: 'gpt-example', label: 'GPT Example', efforts: ['none', 'me
 beforeEach(() => { resetChatModelsForTests(); vi.useFakeTimers(); });
 afterEach(() => vi.useRealTimers());
 describe('ephemeral observed ChatGPT model catalog', () => {
+  it('observes existing tabs once on window show without opening Chrome or invalidating ready models', async () => {
+    const wake = vi.fn(async () => {}); configureChatModelDiscovery({ wake, changed: () => {} });
+    await startChatModelDiscovery(false);
+    const request = pendingChatModelRequest()!;
+    expect(request.allowOpen).toBe(false);
+    expect(wake).toHaveBeenCalledWith(request.nonce, false);
+    observeChatModels({ nonce: request.nonce, models });
+    await startChatModelDiscovery(false); await startChatModelDiscovery(false);
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(getChatModels()).toMatchObject({ state: 'ready', models });
+  });
   it('shares explicit browser startup and publishes a bounded expiry without polling', async () => {
     let release!: () => void;
     const wake = vi.fn(() => new Promise<void>(resolve => { release = resolve; }));

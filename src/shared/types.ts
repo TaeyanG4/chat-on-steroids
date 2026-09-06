@@ -117,6 +117,8 @@ export interface TunnelSettings {
 }
 
 export interface UiPrefs {
+  /** Maintenance may reuse existing tabs but cannot open helpers or missing chats. */
+  browserOnly?: boolean;
   backgroundChats?: boolean;
   /** Actual app-owned tabs to retain; active work and drafts stay protected. Omitted uses workers + 2. */
   tabsToKeepOpen?: number;
