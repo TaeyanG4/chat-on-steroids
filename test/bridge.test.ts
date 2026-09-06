@@ -3971,7 +3971,7 @@ ${SAMPLE_BRIEF}` }
     const stored = await captureFrom(HOME);
 
     expect(stored.body.stored).toBe(true);
-    expect(stored.body.placement).toEqual({ id: stored.body.commandId, model: null, reasoningEffort: null });
+    expect(stored.body.placement).toMatchObject({ id: stored.body.commandId, model: null, reasoningEffort: null, active: true });
     // The whole point: this app did not ask the operating system where its own chat should go.
     expect(opened).toEqual([]);
     expect(pendingCommands()).toEqual([
@@ -4239,25 +4239,34 @@ describe('targeted open', () => {
 // ------------------------------------------------------- worker bootstrap failure
 
 describe('a worker chat that never opens', () => {
-  it('hands a background worker to companion status once without raising the OS browser', async () => {
+  it.each([true, false])('places two workers once through the companion with background window=%s', async (backgroundChats) => {
     await pair();
     const config = getConfig();
-    await saveConfig({ ...config, ui: { ...config.ui, backgroundChats: true } });
+    await saveConfig({ ...config, ui: { ...config.ui, backgroundChats } });
     await request('GET', '/status');
     const socket = new WebSocket(base.replace('http:', 'ws:') + '/wake', { origin: EXTENSION_ORIGIN });
     await once(socket, 'open');
     const authenticated = once(socket, 'message'); socket.send(token!); await authenticated;
     try {
-    spawn({ workers: [{ task: 'background placement probe' }], caller: { conversationId: PRIME_CHAT } });
+    spawn({ workers: [{ task: 'first placement probe' }, { task: 'second placement probe' }], caller: { conversationId: PRIME_CHAT } });
     let placement: any;
     await vi.waitFor(async () => {
       const result = await request('GET', '/status');
       placement ||= result.body.placement;
-      expect(placement?.background).toBe(true);
+      expect(placement?.id).toBeTruthy();
+      expect(placement.active).toBe(false);
+      expect(placement.background === true).toBe(backgroundChats);
     });
     expect(opened).toEqual([]);
     expect((await request('GET', '/status')).body.placement).toBeNull();
     expect((await redeem(placement.id)).agent).toBe('worker-1');
+    await request('POST', '/commands/ack', { body: { id: placement.id, status: 'sent', agent: 'worker-1', conversationId: 'abababab-1111-4222-8333-444444444444' } });
+    let second: any;
+    await vi.waitFor(async () => { second ||= (await request('GET', '/status')).body.placement; expect(second?.id).toBeTruthy(); });
+    expect(second.id).not.toBe(placement.id);
+    expect(second.active).toBe(false);
+    expect((await redeem(second.id)).agent).toBe('worker-2');
+    expect((await request('GET', '/status')).body.placement).toBeNull();
     expect(opened).toEqual([]);
     } finally { const closed = once(socket, 'close'); socket.close(); await closed; }
   });
@@ -4379,59 +4388,23 @@ describe('a worker chat that never opens', () => {
     }
   });
 
-  /**
-   * A chat that opened and never picked up its marker is opened once more, then failed.
-   *
-   * worker-4 on 2026-09-02: the tab loaded as an empty New chat, the bridge held its lease for
-   * the full ninety seconds, and the two workers queued behind it opened only after it was
-   * failed. The re-open is the same command — single-owner, so a late redeem from the first tab
-   * is refused and nothing is typed twice — and it is spent once.
-   */
-  it('opens a worker chat once more when the first page never redeems, and fails it after the second silence', async () => {
+  it('fails an unredeemed opening without duplicating it and advances to the next worker', async () => {
     vi.useFakeTimers();
     try {
       await pair();
-      spawn({ workers: [{ task: 'opens first' }, { task: 'waits behind it' }], caller: { conversationId: PRIME_CHAT } });
+      spawn({ workers: [{ task: 'first' }, { task: 'second' }], caller: { conversationId: PRIME_CHAT } });
       await vi.waitFor(() => expect(opened).toHaveLength(1));
       const first = new URL(opened[0]!).searchParams.get('clf')!;
-
       await vi.advanceTimersByTimeAsync(WORKER_REDEEM_MS + 1_000);
       await vi.waitFor(() => expect(opened).toHaveLength(2));
-      // The same command, not a second one: whichever page redeems first owns it.
-      expect(new URL(opened[1]!).searchParams.get('clf')).toBe(first);
-      expect(pendingWorkerSpawns().map((worker) => worker.id)).toEqual(['worker-1', 'worker-2']);
-
-      const second = await redeem(first, 'tab-2');
-      expect(second.agent).toBe('worker-1');
-      const late = await request('POST', '/commands/redeem', { body: { id: first, client: 'tab-1' } });
-      expect(late.status).toBe(409);
-      // Owned now: the page's typing budget applies, and the redeem window no longer does.
+      const second = new URL(opened[1]!).searchParams.get('clf')!;
+      expect(second).not.toBe(first);
+      expect(swarmState().agents.find(agent => agent.id === 'worker-1')?.state).toBe('failed');
+      expect((await request('POST', '/commands/redeem', { body: { id: first, client: 'late-page' } })).status).toBe(404);
+      expect((await redeem(second)).agent).toBe('worker-2');
       await vi.advanceTimersByTimeAsync(WORKER_REDEEM_MS + 1_000);
       expect(opened).toHaveLength(2);
-      expect(pendingWorkerSpawns().map((worker) => worker.id)).toEqual(['worker-1', 'worker-2']);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('fails a worker whose reopened chat never redeems either, and moves the line on', async () => {
-    vi.useFakeTimers();
-    try {
-      await pair();
-      spawn({ workers: [{ task: 'opens first' }, { task: 'waits behind it' }], caller: { conversationId: PRIME_CHAT } });
-      await vi.waitFor(() => expect(opened).toHaveLength(1));
-      await vi.advanceTimersByTimeAsync(WORKER_REDEEM_MS + 1_000);
-      await vi.waitFor(() => expect(opened).toHaveLength(2));
-      await vi.advanceTimersByTimeAsync(WORKER_REDEEM_MS + 1_000);
-      // worker-1 is failed, and worker-2's chat opens in the same beat rather than after ninety seconds.
-      await vi.waitFor(() => expect(opened).toHaveLength(3));
-      expect(pendingWorkerSpawns().map((worker) => worker.id)).toEqual(['worker-2']);
-      expect(swarmState().agents.find((agent) => agent.id === 'worker-1')?.state).toBe('failed');
-      const next = await redeem(new URL(opened[2]!).searchParams.get('clf')!);
-      expect(next.agent).toBe('worker-2');
-    } finally {
-      vi.useRealTimers();
-    }
+    } finally { vi.useRealTimers(); }
   });
 
   /**
@@ -4451,34 +4424,18 @@ describe('a worker chat that never opens', () => {
         caller: { conversationId: PRIME_CHAT }
       });
       expect(pendingWorkerSpawns().map((worker) => worker.id)).toEqual(['worker-1', 'worker-2', 'worker-3']);
-      // Nothing ever redeems. Each worker's chat opens, is opened once more, and fails: worker-1
-      // by forty seconds, worker-2 by eighty, and worker-3's re-open lands at about a hundred.
-      // Counting worker-3's clock from *there* would keep the slot invited past two minutes; the
-      // limit is measured from the invitation instead.
+      // Each failed opening releases its slot without opening the same command again.
       let elapsed = 0;
       const advance = async (ms: number): Promise<void> => {
         await vi.advanceTimersByTimeAsync(ms);
         elapsed += ms;
       };
-      // Each re-open re-leases through a real durable write, which lands after the fake clock has
-      // moved on, so the deadline it arms may need one more tick to fire.
-      const openedSoon = async (count: number): Promise<void> => {
-        try {
-          await vi.waitFor(() => expect(opened).toHaveLength(count), { timeout: 300 });
-        } catch {
-          await advance(1_000);
-          await vi.waitFor(() => expect(opened).toHaveLength(count));
-        }
-      };
-      for (let count = 1; count <= 5; count += 1) {
-        await openedSoon(count);
-        // The browser keeps polling, so no re-open is mistaken for a cold browser launch.
+      for (let count = 1; count <= 3; count++) {
+        await vi.waitFor(() => expect(opened).toHaveLength(count));
         await request('GET', '/status');
         await advance(WORKER_REDEEM_MS + 1_000);
       }
-      await openedSoon(6);
-      expect(elapsed).toBeLessThan(WORKER_BOOTSTRAP_LIMIT_MS - 5_000);
-      expect(pendingWorkerSpawns().map((worker) => worker.id)).toEqual(['worker-3']);
+      expect(new Set(opened.map(url => new URL(url).searchParams.get('clf'))).size).toBe(3);
 
       await advance(WORKER_BOOTSTRAP_LIMIT_MS + 1_000 - elapsed);
       // No zombie slot left behind: nothing is still owed a tab, and nothing is still invited.

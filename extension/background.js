@@ -2027,7 +2027,7 @@ async function maintainOnce() {
   backgroundWorkArea = area && ['x', 'y', 'width', 'height'].every(key => Number.isInteger(area[key])) && area.width > 0 && area.height > 0
     ? { left: area.x, top: area.y, width: area.width, height: area.height } : null;
   const backgroundReady = await reconcileBackgroundWindow(reply.data);
-  if (reply.data.placement?.background === true) await placeSuccessorChat(reply.data.placement, null);
+  if (reply.data.placement) await placeSuccessorChat(reply.data.placement, null);
   inspectRequestedModels(reply.data.modelCatalogRequest);
   inspectRequestedPluginRefresh(reply.data.pluginRefreshRequests, reply.data.background === true, reply.data.browserOnly === true);
   await deliverDesktopInputs(reply.data.inputs, reply.data.background === true);
@@ -3197,7 +3197,16 @@ async function placeSuccessorChat(raw, tabId) {
     }
     return;
   }
-  if (!id || typeof tabId !== 'number') return;
+  if (!id) return;
+  if (typeof tabId !== 'number') {
+    const conversationId = cleanConversationId(raw.homeConversationId);
+    if (!conversationId) return;
+    try {
+      const tabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
+      tabId = tabs.filter(tab => conversationForTab(tab) === conversationId).sort((a, b) => a.id - b.id)[0]?.id;
+    } catch { return; }
+    if (typeof tabId !== 'number') return;
+  }
   let home = null;
   try {
     home = await chrome.tabs.get(tabId);
@@ -3215,15 +3224,19 @@ async function placeSuccessorChat(raw, tabId) {
   const query = [marker];
   if (model) query.push(`model=${encodeURIComponent(model)}`);
   if (reasoningEffort) query.push(`reasoning_effort=${encodeURIComponent(reasoningEffort)}`);
-  const create = { url: `https://chatgpt.com/?${query.join('&')}#${marker}`, windowId: home.windowId, active: true };
+  const create = { url: `https://chatgpt.com/?${query.join('&')}#${marker}`, windowId: home.windowId, active: raw.active !== false };
   // Directly after the chat it continues, so a handoff reads as one piece of work instead of a
   // tab appended to the far end of a long strip.
   if (typeof home.index === 'number') create.index = home.index + 1;
   try {
-    await chrome.tabs.create(create);
+    const created = await chrome.tabs.create(create);
+    if (raw.active === false && Number.isInteger(created?.id)) {
+      await chrome.tabs.update(created.id, { autoDiscardable: false });
+      discardProtectedTabs[String(created.id)] = true;
+      await persistLive();
+    }
   } catch {
-    // Window teardown or browser policy rejected the create. The app's placement fallback
-    // turns that into an ordinary OS open rather than a lost command.
+    // Opening authority was spent. The command deadline reports an unsuccessful attempt.
   }
 }
 

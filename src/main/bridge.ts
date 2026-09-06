@@ -223,27 +223,8 @@ const RATE_LIMIT = 900;
  * after everybody had stopped expecting them.
  */
 export const COMMAND_DEADLINE_MS = 90_000;
-/**
- * The two clocks a worker bootstrap lives under before it is a failure rather than a wait.
- *
- * `REDEEM` is how long the chat this app opened gets to pick up its instruction. That is the
- * browser's whole round trip — create the tab, load ChatGPT, run the content script, redeem —
- * and it takes four to six seconds when it works at all; twenty is the same allowance the
- * placement offer gives it. A page that has not redeemed by then is not slow, it is dead: a tab
- * that loaded and never ran the marker (worker-4 on 2026-09-02 sat as an empty New chat for the
- * full ninety seconds, and the two workers queued behind it opened only after it was failed).
- * So the chat is opened once more, once, and a second silence fails the slot. This is safe
- * because `/commands/redeem` is single-owner: whichever page redeems first types, the other is
- * told there is nothing for it, and the worst case is one blank tab. It is bounded because the
- * retry is spent once and `LIMIT` is absolute, measured from the moment the broker invited the
- * worker, so no combination of a late hand-out and a fresh lease keeps a slot `invited` past it
- * — which is what happened to a worker whose command sat unleased for nine minutes holding the
- * last free slot.
- *
- * Once a page owns the command the attempt is one-shot again: it has `COMMAND_DEADLINE_MS` to
- * type and name its chat, and a page that redeemed and never typed is a failure, not a prompt
- * to open another chat.
- */
+/** A missing redemption ends this one opening attempt; it never licenses another tab.
+ * The absolute invitation lifetime also bounds commands waiting behind another bootstrap. */
 export const WORKER_REDEEM_MS = 20_000;
 export const WORKER_BOOTSTRAP_LIMIT_MS = 120_000;
 /** A worker may occupy the broker's `waking` state for one short, absolute attempt. */
@@ -433,14 +414,8 @@ interface Command {
    * already on it.
    */
   claimedAt: number | null;
-  /**
-   * When a worker bootstrap's one re-open was spent, so it is spent once. Memory only.
-   *
-   * Not persisted: after a restart the absolute limit is still measured from the persisted
-   * `createdAt`, so the worst a forgotten retry can cost is one more open of the same
-   * single-owner command inside a window that ends at the same instant either way.
-   */
-  retriedAt: number | null;
+  /** Transient uncollected placement, owned by this command and removed on handout. */
+  placement?: { conversationId: string | null; background: boolean };
   /**
    * The one-shot that ends this command when its deadline passes. Memory only.
    *
@@ -4268,7 +4243,6 @@ function queue(spec: CommandSpec): Command {
     spec,
     createdAt: Date.now(),
     claimedAt: null,
-    retriedAt: null,
     timer: null,
     lastError: null,
     owner: null
@@ -4731,55 +4705,34 @@ function commandHomeConversation(spec: CommandSpec): string | null {
  */
 let placementCollector: string | null = null;
 
-/** The one fresh chat currently offered to its home page. */
-let placementOffer: { id: string; conversationId: string | null; model: string | null; reasoningEffort: ReasoningEffort | null } | null = null;
-
-/** Drops the standing offer. Called by every path that ends a command. */
-function clearPlacementOffer(): void {
-  placementOffer = null;
-}
-
-/**
- * Offers a leased fresh chat to the page of the chat it succeeds.
- *
- * Returns false whenever this app cannot name a home chat that is asking for this command
- * right now, which is every path except a page-driven compaction. Those open through the OS
- * opener exactly as before, because there is genuinely nothing better to know about them.
- */
+/** Transfer opening authority through the companion while it has a live wake connection. */
 function offerPlacement(command: Command): boolean {
   const home = commandHomeConversation(command.spec);
-  const backgroundWorker = command.spec.type === 'worker' && getConfig().ui.backgroundChats && browserWakeConnected();
-  if (!backgroundWorker && (!home || home !== placementCollector)) return false;
-  clearPlacementOffer();
-  placementOffer = {
-    id: command.id,
-    conversationId: backgroundWorker ? null : home,
-    model: command.spec.type === 'worker' ? command.spec.model : null,
-    reasoningEffort: command.spec.type === 'worker' ? command.spec.reasoningEffort : null
-  };
-  if (backgroundWorker) wakeBrowserWork();
-  logInfo(`bridge: offering ${specKey(command.spec)} to ${home}'s own browser window`);
+  const worker = command.spec.type === 'worker' && browserWakeConnected();
+  if (!worker && (!home || home !== placementCollector)) return false;
+  command.placement = { conversationId: home, background: worker && getConfig().ui.backgroundChats === true };
+  if (worker) wakeBrowserWork();
   return true;
 }
 
-/**
- * The one fresh chat this conversation's browser is being asked to open next to itself.
- *
- * Spent on handout. The page that collects it is the page that opens the tab, and a second
- * poll - from another tab of the same chat, or the same tab a moment later - must not create
- * a second one. Handout transfers opening authority, before hydration or redemption.
- * A missing receipt cannot prove that Chrome did not create the tab. The existing command
- * deadline reports failure; neither a timer nor another poll may issue a second open.
- */
-function pendingBrowserPlacement(conversationId: string | null): { id: string; model: string | null; reasoningEffort: ReasoningEffort | null; background?: true } | null {
-  const offer = placementOffer;
-  if (!offer || offer.conversationId !== conversationId) return null;
-  if (!commands.some((entry) => entry.id === offer.id && entry.owner === null)) {
-    placementOffer = null;
-    return null;
-  }
-  placementOffer = null;
-  return { id: offer.id, model: offer.model, reasoningEffort: offer.reasoningEffort, ...(offer.conversationId === null ? { background: true as const } : {}) };
+/** Handout is the irreversible opening boundary, independent of a later page receipt. */
+function pendingBrowserPlacement(conversationId: string | null): {
+  id: string; model: string | null; reasoningEffort: ReasoningEffort | null;
+  background?: true; active: boolean; homeConversationId: string | null;
+} | null {
+  const command = commands.find(entry => entry.owner === null && entry.placement &&
+    (entry.placement.conversationId === conversationId || (conversationId === null && entry.spec.type === 'worker')));
+  if (!command?.placement) return null;
+  const placement = command.placement;
+  delete command.placement;
+  const spec = command.spec;
+  const worker = spec.type === 'worker';
+  return {
+    id: command.id, model: worker ? spec.model : null,
+    reasoningEffort: worker ? spec.reasoningEffort : null,
+    active: !worker, homeConversationId: placement.conversationId,
+    ...(placement.background ? { background: true as const } : {})
+  };
 }
 
 // -------------------------------------------------------- exact browser recovery
@@ -6840,20 +6793,6 @@ function expire(command: Command): void {
     retire(command, 'its worker is bound and running');
     return;
   }
-  // The chat opened for it never redeemed the marker. Open it once more, once: the command is
-  // single-owner, so the page that does redeem is the only one that ever types.
-  if (
-    spec.type === 'worker' &&
-    command.claimedAt !== null &&
-    command.owner === null &&
-    command.retriedAt === null &&
-    Date.now() < command.createdAt + WORKER_BOOTSTRAP_LIMIT_MS
-  ) {
-    command.retriedAt = Date.now();
-    logWarn(`bridge: the chat opened for ${specKey(spec)} never picked up its instruction — opening it once more`);
-    void reopenWorkerChat(command);
-    return;
-  }
   if (spec.type === 'revive' && !revivalFor(spec.agent, spec.runId)) {
     retire(command, 'its worker is no longer waiting to be woken');
     return;
@@ -6862,35 +6801,11 @@ function expire(command: Command): void {
   deliver();
 }
 
-/**
- * The one re-open of a worker chat that opened and never redeemed.
- *
- * A fresh lease first, so the redeem window and the durable record both restart from this
- * open; a lease that cannot be written ends the command instead, exactly as a first delivery
- * would. Straight to the OS opener rather than the placement offer: the home page already had
- * its chance to place this one.
- */
-async function reopenWorkerChat(command: Command): Promise<void> {
-  if (!(await persistCommandLease(command, null, Date.now()))) {
-    if (commands.includes(command)) {
-      drop(command, 'the chat this app opened did not report back in time');
-      await deliver();
-    }
-    return;
-  }
-  armDeadline(command);
-  changed();
-  await openFreshChatInBrowser(command);
-}
-
 /** Finishes a command that has nothing left to do, timer and all. */
 function retire(command: Command, why: string): void {
   if (command.timer) clearTimeout(command.timer);
   command.timer = null;
-  // A standing placement offer belongs to this command alone. Handout already re-checks that
-  // the command is still queued, so this is not what makes a retired offer inert — it is what
-  // stops the fifteen-second fallback outliving the thing it was covering for.
-  if (placementOffer?.id === command.id) clearPlacementOffer();
+  delete command.placement;
   if (!commands.includes(command)) return;
   commands = commands.filter((entry) => entry !== command);
   logInfo(`bridge: ${specKey(command.spec)} is done — ${why}`);
@@ -7452,8 +7367,7 @@ function planCommandRestore(
       spec,
       createdAt,
       claimedAt,
-      retriedAt: null,
-      timer: null,
+        timer: null,
       lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
       owner: leased && typeof raw.owner === 'string' ? raw.owner.slice(0, 64) : null
     });
@@ -7599,7 +7513,6 @@ export function resetBridgeForTests(): void {
   if (browserLaunchTimer) clearTimeout(browserLaunchTimer);
   browserLaunchTimer = null;
   lastBrowserLaunchAt = 0;
-  clearPlacementOffer();
   lastSeenAt = null;
   extensionVersion = null;
   versionWarned = false;
