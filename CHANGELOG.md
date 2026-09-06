@@ -23,6 +23,20 @@ the app refuses the extension and asks you to reload the matching copy.
   `reasoning_effort` declared as the canonical vocabulary so a caller can discover it instead of
   guessing. Omitting them is unchanged: the default from app settings, or the account default.
 
+### Added
+- **Your own instructions for the connectors.** A settings field whose text is appended to what
+  the Core and Desktop MCP servers tell ChatGPT about themselves, so a standing preference — run
+  the tests before claiming a change works, prefer this package manager, never force-push — does
+  not have to be repeated in every chat. It is stored in settings, so an app update no longer
+  overwrites it; editing `app.asar` was previously the only way to add anything at all.
+
+  It is appended last and under a heading naming the user as its author. Both are deliberate:
+  everything above it is what the app can actually promise about its own tools, and a preference
+  must not silently redefine one — and the model should be able to tell a standing instruction
+  from the person apart from the connector's description of itself, because those carry different
+  authority. Empty adds nothing, not even the heading. Changing it asks for the same reconnect a
+  tool change does, since ChatGPT reads connector instructions once, when it loads the tools.
+
 ## [2.0.6] — 2026-09-06
 
 **I am exhausted.**

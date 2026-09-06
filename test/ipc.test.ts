@@ -483,6 +483,24 @@ describe('bounded IPC identities and OS launch results', () => {
 });
 
 describe('settings writes from more than one UI', () => {
+  it('persists connector instructions through IPC, preserves concurrent edits, and allows explicit clearing', async () => {
+    const base = defaultConfig(); await saveConfig(base);
+    const wanted = { ...base, mcp: { instructions: 'Use the approved project only.' }, ui: { ...base.ui, browserOnly: true } };
+    expect((await save(wanted, base)).ok).toBe(true);
+    expect(JSON.parse(await fs.readFile(path.join(dir, 'config.json'), 'utf8')).mcp).toEqual(wanted.mcp);
+    expect(getConfig().ui.browserOnly).toBe(true);
+    expect((await save({ ...base, ui: { ...base.ui, minimizeToTray: !base.ui.minimizeToTray } }, base)).ok).toBe(true);
+    expect(getConfig().mcp).toEqual(wanted.mcp);
+    expect(getConfig().ui.browserOnly).toBe(true);
+    const legacy = { ...base } as any; delete legacy.mcp;
+    expect((await save(legacy, legacy)).ok).toBe(true);
+    expect(getConfig().mcp).toEqual(wanted.mcp);
+    const current = getConfig();
+    expect((await save({ ...current, mcp: { instructions: '' } }, current)).ok).toBe(true);
+    expect(getConfig().mcp.instructions).toBe('');
+    expect((await save({ ...current, mcp: { instructions: 'x'.repeat(4001) } }, current)).ok).toBe(false);
+    expect(getConfig().mcp.instructions).toBe('');
+  });
   it('saves helper settings and tab retention through the renderer schema and merge boundary', async () => {
     const base = defaultConfig();
     await saveConfig(base);

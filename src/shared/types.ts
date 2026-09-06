@@ -269,6 +269,12 @@ export interface MultiAgentSettings {
   recoverAgentTabs: boolean;
 }
 
+/** The user's own additions to what each MCP connector tells the model about itself. */
+export interface McpSettings {
+  /** Appended to the Core and Desktop server instructions, or empty for none. */
+  instructions: string;
+}
+
 export interface Config {
   roots: Root[];
   capabilities: Capabilities;
@@ -279,6 +285,7 @@ export interface Config {
   compaction: CompactionSettings;
   multiAgent: MultiAgentSettings;
   goal: GoalSettings;
+  mcp: McpSettings;
 }
 
 export type ConnectionState =
