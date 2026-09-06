@@ -104,6 +104,31 @@ beforeEach(() => {
 });
 
 describe('OpenAI tunnel process ownership', () => {
+  it('classifies structured control-plane context together with its network error', async () => {
+    vi.useFakeTimers();
+    const reports: any[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/readyz') return new Response('ok');
+      if (url.pathname === '/metrics') return new Response('commands_poll_last_successful_timestamp_seconds 0\ncommands_poll_errors_total 1\n');
+      if (url.pathname === '/api/status') return Response.json({ uptime_seconds: 50, channels: [] });
+      return new Response('missing', { status: 404 });
+    }));
+    const handle = await startTunnel({ localUrl: 'http://127.0.0.1:1234/secret', settings, apiKey: 'test', report: r => reports.push(r) });
+    await vi.advanceTimersByTimeAsync(10);
+    fixture.health.url = 'http://127.0.0.1:34567';
+    await vi.advanceTimersByTimeAsync(1_000);
+    const child = fixture.children[0];
+    child.stderr.emit('data', Buffer.from(JSON.stringify({ level: 'WARN', msg: 'MCP probe failed', error: 'dial tcp: i/o timeout' }) + '\n'));
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(reports.some(r => r.state === 'offline')).toBe(false);
+    child.stderr.emit('data', Buffer.from(JSON.stringify({ level: 'WARN', msg: 'poll failed; backing off', error: 'dial tcp: i/o timeout' }) + '\n'));
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(reports.at(-1).state).toBe('offline');
+    expect(fixture.children).toHaveLength(1);
+    await handle.stop();
+  });
+
   it('claims one restart and waits for the old process tree before launching its replacement', async () => {
     vi.useFakeTimers();
     const reports: any[] = [];
