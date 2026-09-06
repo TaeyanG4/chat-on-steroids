@@ -3235,12 +3235,41 @@ async function acceptBrowserRevival(raw) {
 }
 
 /**
+ * Reconciles browser-persisted wake markers with the app before recovery can create a tab.
+ *
+ * The marker deliberately survives a browser restart, while the corresponding app command can
+ * be cancelled, committed, superseded or retired during the same interval. Treating the marker
+ * itself as proof of live work lets a dead id reopen its old ChatGPT conversation on every
+ * browser startup. The app owns command truth, so ask it once for the whole bounded set and fail
+ * closed on transport/version errors: keeping an inert marker for a later retry is harmless;
+ * opening an unproven tab is not.
+ */
+async function reconcileDeferredRevivalsWithApp() {
+  if (deferredRevivals.length === 0) return true;
+  const entries = deferredRevivals
+    .map((entry) => ({ id: deferredRevivalId(entry?.id), conversationId: cleanConversationId(entry?.conversationId) }))
+    .filter((entry) => entry.id && entry.conversationId)
+    .slice(-100);
+  const result = await call('/commands/revivals/pending', {
+    method: 'POST',
+    body: JSON.stringify({ entries })
+  });
+  if (!result.ok || !Array.isArray(result.data?.pending)) return false;
+
+  const pending = new Set(result.data.pending.filter((id) => typeof id === 'string'));
+  const before = deferredRevivals.length;
+  deferredRevivals = deferredRevivals.filter((entry) => pending.has(entry?.id));
+  if (deferredRevivals.length !== before) await persistLive();
+  return true;
+}
+
+/**
  * Re-presents deferred revival markers after MV3/document/browser lifetime loss.
  *
  * There is deliberately no command text here and no local "sent" decision. An existing exact
  * conversation gets first chance to install the content-side readiness waiter. A marked exact
- * chat is created only when the scan finds none, or a complete existing document cannot receive
- * and cannot be repaired. Either path still has to win `/commands/redeem`, so several recovery
+ * chat is created only after the app confirms a live command and the scan proves absence.
+ * Either path still has to win `/commands/redeem`, so several recovery
  * triggers cannot duplicate or cross-deliver text.
  */
 function recoverDeferredRevivals() {
@@ -3257,11 +3286,13 @@ function recoverDeferredRevivals() {
     if (deferredRevivals.length !== before) await persistLive();
     if (deferredRevivals.length === 0) return;
 
+    if (!(await reconcileDeferredRevivalsWithApp()) || deferredRevivals.length === 0) return;
+
     let tabs = [];
     try {
       tabs = await chrome.tabs.query({ url: CHATGPT_TAB_URLS });
     } catch {
-      tabs = [];
+      return;
     }
 
     for (const entry of [...deferredRevivals]) {
@@ -3269,18 +3300,16 @@ function recoverDeferredRevivals() {
         .filter((tab) => tab && typeof tab.id === 'number' && conversationForTab(tab) === entry.conversationId)
         .sort((a, b) => a.id - b.id);
       let routed = false;
-      let starting = false;
       for (const tab of exact) {
         if (await restoreChatgptTab(tab.id)) {
           offerDeferredRevivalToTab(entry, tab);
           routed = true;
           break;
         }
-        // A loading document is not proven broken. Let its registration or the next alarm retry
-        // the same tab; opening during this transient is the original duplication race.
-        if (tab.status !== 'complete') starting = true;
       }
-      if (routed || starting) continue;
+      // A failed receiver/injection is not proof that its tab is absent. Keep the exact
+      // conversation as the only target, including complete but temporarily inaccessible pages.
+      if (routed || exact.length) continue;
 
       const url = deferredRevivalUrl(entry);
       if (!url) continue;
@@ -3332,8 +3361,7 @@ async function restoreChatgptTab(id) {
     // re-run revival routing; opening a second tab during that handoff recreates the race.
     return true;
   } catch {
-    // A complete exact tab that cannot receive or be repaired is proven unusable. Revival may
-    // open one replacement; a loading tab is handled conservatively by the caller.
+    // Injection failure does not transfer ownership to a replacement tab.
     return false;
   }
 }
