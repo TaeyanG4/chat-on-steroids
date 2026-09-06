@@ -2711,7 +2711,8 @@ const HANDLERS = {
           ? { token: message.token, sourceDispatch: true }
           : {}),
         ...(typeof message.token === 'string' && typeof message.sourceMessageId === 'string'
-          ? { token: message.token, sourceMessageId: message.sourceMessageId }
+          ? { token: message.token, sourceMessageId: message.sourceMessageId,
+              ...(Number.isSafeInteger(message.sourceProgress) ? { sourceProgress: message.sourceProgress } : {}) }
           : {}),
         ...(typeof message.token === 'string' && message.destinationAttempt === true
           ? { token: message.token, destinationAttempt: true }

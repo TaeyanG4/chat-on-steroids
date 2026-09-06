@@ -4236,8 +4236,8 @@ describe('targeted open', () => {
       expect(pendingCommands().map((entry) => entry.what)).toEqual([`resume:${sessionId}`]);
       expect(continuationByToken(token)?.state).toBe('claimed');
 
-      // No new lifetime is invented: the existing 10m continuation TTL remains the outer bound.
-      await vi.advanceTimersByTimeAsync(7 * 60_000);
+      // The claim is progress, then ten minutes without further progress ends its waiting lease.
+      await vi.advanceTimersByTimeAsync(8 * 60_000 + 1);
       expect(pendingCommands()).toEqual([]);
       expect(continuationByToken(token)?.state).toBe('aborted');
       expect((await getSession(sessionId))?.conversationId).toBe(sourceConversation);

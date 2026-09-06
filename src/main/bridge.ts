@@ -2215,7 +2215,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (typeof body['sourceMessageId'] === 'string') {
       const entry = continuationByToken(checkpointToken);
       if (!entry || entry.from !== id) return json(res, 409, { error: 'no_such_continuation' }, origin);
-      const bound = await bindContinuationSourceMessageNow(checkpointToken, body['sourceMessageId'].slice(0, 200));
+      const bound = await bindContinuationSourceMessageNow(checkpointToken, body['sourceMessageId'].slice(0, 200),
+        typeof body['sourceProgress'] === 'number' ? body['sourceProgress'] : undefined);
       return bound
         ? json(res, 200, { bound: true, job: resumeJobFor(entry.sessionId) }, origin)
         : json(res, 409, { error: 'source_message_conflict' }, origin);
@@ -6717,7 +6718,7 @@ function commandDeadlineDelay(command: Command, now = Date.now()): number {
   }
   if (command.spec.type === 'resume' && command.owner !== null) {
     const continuation = continuationByToken(command.spec.token);
-    if (continuation?.state === 'claimed') return continuation.openedAt + CONTINUATION_TTL_MS - now;
+    if (continuation?.state === 'claimed') return continuation.touchedAt + CONTINUATION_TTL_MS - now;
   }
   if (command.spec.type === 'worker') {
     // Absolute, from the invitation. Whatever else this command is waiting for, the slot it

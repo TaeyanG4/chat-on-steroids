@@ -8157,7 +8157,11 @@
       type: 'compact',
       conversationId,
       token: marked.token,
-      sourceMessageId: marked.messageId
+      sourceMessageId: marked.messageId,
+      // A monotonic measure of the exact response, not the page's generating spinner.
+      sourceProgress: Math.min(4_000_000, (marked.answer?.messages || []).reduce(
+        (total, message) => total + String(message.rawText || '').length, 0
+      ) + (marked.answer?.calls || []).filter(call => call?.answered === true).length)
     });
     if (!bound || bound.ok !== true) return appAnswered(bound) ? 'settled' : false;
     // The answer turn, not the prompt's — see answerTurnFor. Its calls are the ones that have
