@@ -9925,7 +9925,10 @@
       if (before === expected) {
         return (await ask({ type: 'plugin_refresh', action: 'current', id: request.id, appId, connectorName: request.connectorName, tools: view.tools }))?.data?.ok === true && stillCurrent();
       }
-      if (!view.refresh || view.refresh.disabled) { await fail('Connector schema differs, but a Refresh control is unavailable'); return false; }
+      if (!view.refresh || view.refresh.disabled) {
+        const error = 'Connector schema differs, but ChatGPT exposes no Refresh control. Recreate or republish this custom app to load the current tool schema.';
+        return (await ask({ type: 'plugin_refresh', action: 'manual', id: request.id, appId, connectorName: request.connectorName, tools: view.tools, error }))?.data?.ok === true && stillCurrent();
+      }
       const claimed = await ask({ type: 'plugin_refresh', action: 'claim', id: request.id, appId, connectorName: request.connectorName, tools: view.tools });
       if (!claimed?.data?.ok || !stillCurrent()) { await fail('Connector refresh claim or page ownership was not confirmed'); return false; }
       view.refresh.click(); // the durable main-process attempt owns this one click

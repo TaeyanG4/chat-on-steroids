@@ -2264,12 +2264,12 @@ const HANDLERS = {
     if (!ownsDocument(source) || !/^[a-f0-9-]{36}$/i.test(String(message.id || ''))) return { ok: false };
     const tab = await chrome.tabs.get(source.tab);
     if (!ownsDocument(source) || pluginRefreshMarker(tab) !== message.id) return { ok: false };
-    if (!['claim', 'current', 'complete', 'fail'].includes(message.action)) return { ok: false };
+    if (!['claim', 'current', 'manual', 'complete', 'fail'].includes(message.action)) return { ok: false };
     const body = JSON.stringify({ action: message.action, id: message.id, appId: message.appId, connectorName: message.connectorName, tools: message.tools, versionId: message.versionId, error: message.error });
     if (body.length > 310000) return { ok: false };
     const result = await call('/plugin-refresh', { method: 'POST', body });
     if (!ownsDocument(source) || pluginRefreshMarker(await chrome.tabs.get(source.tab)) !== message.id) return { ok: false };
-    if (['current', 'complete', 'fail'].includes(message.action) && result.ok && result.data?.ok) void maintain();
+    if (['current', 'manual', 'complete', 'fail'].includes(message.action) && result.ok && result.data?.ok) void maintain();
     return result;
   },
   async model_catalog(message, _sender, source) {

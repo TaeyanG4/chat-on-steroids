@@ -148,6 +148,18 @@ describe('IPC input delivery and Goal control integration', () => {
     expect((await post('/plugin-refresh', { ...identity, action: 'complete', tools, versionId: 'asdk_app_v_synthetic' })).body.ok).toBe(true);
     resetPluginRefreshForTests();
   });
+  it('accepts a manual plugin-refresh terminal state and removes it from browser pickup', async () => {
+    const { publishPluginSurface, resetPluginRefreshForTests } = await import('../src/main/plugin-refresh.js');
+    resetPluginRefreshForTests();
+    const tools = [{ name: 'read', description: 'Read current', inputSchema: { type: 'object', properties: {} } }];
+    const installed = [{ ...tools[0], description: 'Read old' }];
+    publishPluginSurface('core', 'Chat On Steroids Core', 'test', 'Synthetic instructions', tools);
+    const request = (await post('/plugin-refresh', { action: 'pending' })).body.requests[0];
+    const manual = await post('/plugin-refresh', { ...request, appId: 'asdk_app_synthetic', action: 'manual', connectorName: 'Chat On Steroids Core', tools: installed, error: 'Recreate or republish this custom app.' });
+    expect(manual.body.ok).toBe(true);
+    expect((await post('/plugin-refresh', { action: 'pending' })).body.requests).toEqual([]);
+    resetPluginRefreshForTests();
+  });
   it.each(['browser', 'tool'] as const)('records %s receipt text and pixels through the real IPC hook', async (transport) => {
     const { default: sharp } = await import('sharp');
     const { readEvents } = await import('../src/main/session/store.js');

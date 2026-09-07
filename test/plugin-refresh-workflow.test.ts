@@ -83,6 +83,17 @@ it('records an already current schema when the workspace exposes no Refresh cont
   expect(h.click).not.toHaveBeenCalled();
   expect(h.ask.mock.calls.map(([message]) => message.action)).toEqual(['current']);
 });
+it('stops automatic retry when a changed schema has no Refresh control', async () => {
+  const h = workflow({ refreshAvailable: false });
+  expect(await h.run()).toBe(true);
+  expect(h.click).not.toHaveBeenCalled();
+  expect(h.ask.mock.calls.map(([message]) => message.action)).toEqual(['manual']);
+  expect(h.ask.mock.calls[0]?.[0]).toMatchObject({
+    appId: 'asdk_app_synthetic',
+    connectorName: 'Chat On Steroids Core',
+    tools: [{ name: 'read', description: 'Old description.' }]
+  });
+});
 it('opens an enrolled exact App Id directly in marked settings without name discovery', async () => {
   const background = readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8');
   const code = background.slice(background.indexOf('let pluginRefreshFlight = null;'), background.indexOf('async function catalogProbe('));

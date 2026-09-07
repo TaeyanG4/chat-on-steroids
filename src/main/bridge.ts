@@ -2,7 +2,7 @@ import { pendingChatModelRequest, observeChatModels } from './chat-models.js';
 import { isProModel } from '../shared/chat-models.js';
 import type { SessionSummary } from '../shared/session.js';
 import { publishBrowserDecision, authorizeBrowserInput, sessionInputPolicy } from './session/input.js';
-import { pluginRefreshPublications, pendingPluginRefreshes, claimPluginRefresh, completePluginRefresh, failPluginRefresh } from './plugin-refresh.js';
+import { pluginRefreshPublications, pendingPluginRefreshes, claimPluginRefresh, requireManualPluginRefresh, completePluginRefresh, failPluginRefresh } from './plugin-refresh.js';
 import { attachBrowserWake, wakeBrowserWork } from './browser-wake.js';
 let browserWake: ReturnType<typeof attachBrowserWake> | null = null;
 let browserWorkArea: (() => { x: number; y: number; width: number; height: number }) | null = null;
@@ -1394,6 +1394,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     if (body.action === 'fail' && typeof body.error === 'string') ok = await failPluginRefresh({ id: body.id, error: body.error.slice(0, 200) });
     else if (typeof body.appId === 'string' && /^asdk_app_[a-zA-Z0-9_-]{1,160}$/.test(body.appId)) {
       if ((body.action === 'claim' || body.action === 'current') && typeof body.connectorName === 'string') ok = await claimPluginRefresh({ id: body.id, appId: body.appId, connectorName: body.connectorName, tools: body.tools, alreadyCurrent: body.action === 'current' });
+      if (body.action === 'manual' && typeof body.connectorName === 'string' && typeof body.error === 'string') ok = await requireManualPluginRefresh({ id: body.id, appId: body.appId, connectorName: body.connectorName, tools: body.tools, error: body.error.slice(0, 200) });
       if (body.action === 'complete') ok = await completePluginRefresh({ id: body.id, appId: body.appId, tools: body.tools, versionId: typeof body.versionId === 'string' ? body.versionId.slice(0, 200) : undefined });
     }
     if (ok) changed();
